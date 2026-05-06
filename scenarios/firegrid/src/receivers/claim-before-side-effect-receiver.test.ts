@@ -6,8 +6,8 @@ import { Firegrid, run } from "@firegrid/runtime"
 import {
   ChargeCardOperation,
   makeClaimBeforeSideEffectScenarioRows,
-} from "./claim-before-side-effect.ts"
-import { inspectScenarioStream } from "./inspect.ts"
+} from "../emitters/claim-before-side-effect.ts"
+import { inspectScenarioStream } from "../inspect.ts"
 
 let server: DurableStreamTestServer | undefined
 

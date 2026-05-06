@@ -14,7 +14,7 @@ import {
   makeOperationStartedRunRow,
   scenarioRowsFromIterable,
   writeScenarioRowsToNdjson,
-} from "./scenario.ts"
+} from "../scenario.ts"
 
 export const PermissionEvents = EventStream.define({
   name: "PermissionEvents",

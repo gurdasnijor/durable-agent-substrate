@@ -14,8 +14,8 @@ import { fileURLToPath } from "node:url"
 import {
   ScheduledReminderOperation,
   makeScheduledWorkScenarioRows,
-} from "./scheduled-work.ts"
-import { inspectScenarioStream, type ScenarioInspection } from "./inspect.ts"
+} from "../emitters/scheduled-work.ts"
+import { inspectScenarioStream, type ScenarioInspection } from "../inspect.ts"
 
 const DEFAULT_RUN_ID = "run-scheduled-work-cli-1"
 const DEFAULT_COMPLETION_ID = "completion-scheduled-work-cli-1"

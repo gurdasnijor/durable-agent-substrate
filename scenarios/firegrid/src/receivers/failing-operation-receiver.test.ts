@@ -2,8 +2,8 @@ import { DurableStream } from "@durable-streams/client"
 import { DurableStreamTestServer } from "@durable-streams/server"
 import { Effect, Fiber, Schedule } from "effect"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { makeFailingOperationScenarioRows } from "./failing-operation.ts"
-import { inspectScenarioStream } from "./inspect.ts"
+import { makeFailingOperationScenarioRows } from "../emitters/failing-operation.ts"
+import { inspectScenarioStream } from "../inspect.ts"
 import { runFailingOperationReceiver } from "./failing-operation-receiver.ts"
 
 let server: DurableStreamTestServer | undefined

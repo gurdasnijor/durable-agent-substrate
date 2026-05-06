@@ -12,7 +12,7 @@ import {
   makePendingCompletionScenarioRow,
   scenarioRowsFromIterable,
   writeScenarioRowsToNdjson,
-} from "./scenario.ts"
+} from "../scenario.ts"
 
 export const ScheduledReminderInput = Schema.Struct({
   reminderId: Schema.String,

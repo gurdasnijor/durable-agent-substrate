@@ -17,12 +17,12 @@ import {
   inspectScenarioStream,
   inspectSnapshot,
   type ScenarioInspection,
-} from "./inspect.ts"
+} from "../inspect.ts"
 import {
   PermissionEvents,
   WaitForPermissionOperation,
   makeWaitForScenarioRows,
-} from "./wait-for.ts"
+} from "../emitters/wait-for.ts"
 
 class ScenarioInspectionFailed extends Data.TaggedError(
   "ScenarioInspectionFailed",

@@ -10,7 +10,7 @@ import {
   resolveCompletionScenarioRow,
   scenarioRowsFromIterable,
   writeScenarioRowsToNdjson,
-} from "./scenario.ts"
+} from "../scenario.ts"
 import { Schema } from "effect"
 import { fileURLToPath } from "node:url"
 

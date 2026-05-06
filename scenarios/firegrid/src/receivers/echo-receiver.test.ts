@@ -2,8 +2,8 @@ import { DurableStream } from "@durable-streams/client"
 import { DurableStreamTestServer } from "@durable-streams/server"
 import { Effect, Fiber, Schedule } from "effect"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { makeEchoScenarioRows } from "./echo.ts"
-import { inspectScenarioStream } from "./inspect.ts"
+import { makeEchoScenarioRows } from "../emitters/echo.ts"
+import { inspectScenarioStream } from "../inspect.ts"
 import { runEchoReceiver } from "./echo-receiver.ts"
 
 let server: DurableStreamTestServer | undefined

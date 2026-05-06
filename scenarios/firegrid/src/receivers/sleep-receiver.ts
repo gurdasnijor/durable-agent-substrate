@@ -13,13 +13,13 @@ import { fileURLToPath } from "node:url"
 import {
   inspectScenarioStream,
   type ScenarioInspection,
-} from "./inspect.ts"
+} from "../inspect.ts"
 import {
   DEFAULT_SLEEP_DURATION_MS,
   DEFAULT_SLEEP_LABEL,
   SleepOperation,
   makeSleepScenarioRows,
-} from "./sleep.ts"
+} from "../emitters/sleep.ts"
 
 class ScenarioInspectionFailed extends Data.TaggedError(
   "ScenarioInspectionFailed",

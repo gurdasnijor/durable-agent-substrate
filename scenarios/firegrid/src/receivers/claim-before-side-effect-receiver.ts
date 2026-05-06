@@ -11,8 +11,8 @@ import {
 } from "effect"
 import { parseArgs } from "node:util"
 import { fileURLToPath } from "node:url"
-import { ChargeCardOperation } from "./claim-before-side-effect.ts"
-import { inspectScenarioStream, type ScenarioInspection } from "./inspect.ts"
+import { ChargeCardOperation } from "../emitters/claim-before-side-effect.ts"
+import { inspectScenarioStream, type ScenarioInspection } from "../inspect.ts"
 
 const PARTICIPANT_COUNT = 2
 const POLL_TIMEOUT_MS = 30_000
