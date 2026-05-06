@@ -36,18 +36,18 @@ export {
   FiregridRuntimeBoot,
   type AttachedRuntimeOptions,
   type EmbeddedDevRuntimeOptions,
-} from "./runtime/layer.ts"
+} from "./boot.ts"
 
-export { Firegrid } from "./runtime/firegrid.ts"
+export { Firegrid } from "./runtime-api.ts"
 
 export {
   RuntimeContext,
   type RuntimeContextService,
-} from "./runtime/runtime-context.ts"
+} from "./context.ts"
 
 export {
   FiregridRuntime,
   type BootMode,
   type FiregridRuntimeService,
   type FiregridRuntimeStreamIdentity,
-} from "./runtime/service.ts"
+} from "./service.ts"
