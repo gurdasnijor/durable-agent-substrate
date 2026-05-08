@@ -1,5 +1,6 @@
 import type { CommandExecutor } from "@effect/platform/CommandExecutor"
-import { Context, Effect, Layer, Schema } from "effect"
+import type { Effect, Stream } from "effect"
+import { Context, Layer, Schema } from "effect"
 
 export const SandboxStateSchema = Schema.Literal(
   "creating",
@@ -29,6 +30,7 @@ export type SandboxConfig = Schema.Schema.Type<typeof SandboxConfigSchema>
 export const SandboxCommandSchema = Schema.Struct({
   argv: Schema.Array(Schema.String),
   cwd: Schema.optional(Schema.String),
+  envVars: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
 })
 export type SandboxCommand = Schema.Schema.Type<typeof SandboxCommandSchema>
 
@@ -63,6 +65,20 @@ export const ProviderCapabilitiesSchema = Schema.Struct({
 })
 export type ProviderCapabilities = Schema.Schema.Type<typeof ProviderCapabilitiesSchema>
 
+export const ProcessOutputChunkSchema = Schema.Union(
+  Schema.Struct({
+    type: Schema.Literal("output"),
+    channel: Schema.Literal("stdout", "stderr"),
+    text: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("exit"),
+    exitCode: Schema.Number,
+    signal: Schema.optional(Schema.String),
+  }),
+)
+export type ProcessOutputChunk = Schema.Schema.Type<typeof ProcessOutputChunkSchema>
+
 export class SandboxProviderError extends Schema.TaggedError<SandboxProviderError>()(
   "SandboxProviderError",
   {
@@ -76,18 +92,24 @@ export class SandboxProviderError extends Schema.TaggedError<SandboxProviderErro
 export interface SandboxProviderService {
   readonly name: string
   readonly capabilities: ProviderCapabilities
-  readonly createSandbox: (config: SandboxConfig) => Effect.Effect<Sandbox, SandboxProviderError>
-  readonly getSandbox: (sandboxId: string) => Effect.Effect<Sandbox | undefined, SandboxProviderError>
-  readonly listSandboxes: (labels?: Record<string, string>) => Effect.Effect<ReadonlyArray<Sandbox>, SandboxProviderError>
-  readonly executeCommand: (
-    sandboxId: string,
+  readonly create: (config: SandboxConfig) => Effect.Effect<Sandbox, SandboxProviderError>
+  readonly getOrCreate: (config: SandboxConfig) => Effect.Effect<Sandbox, SandboxProviderError>
+  readonly find: (labels: Record<string, string>) => Effect.Effect<Sandbox | undefined, SandboxProviderError>
+  readonly execute: (
+    sandbox: Sandbox,
     command: SandboxCommand,
-    options?: {
-      readonly timeoutSeconds?: number
-      readonly envVars?: Record<string, string>
-    },
   ) => Effect.Effect<ExecutionResult, SandboxProviderError, CommandExecutor>
-  readonly destroySandbox: (sandboxId: string) => Effect.Effect<boolean, SandboxProviderError>
+  readonly executeMany: (
+    sandbox: Sandbox,
+    commands: ReadonlyArray<SandboxCommand>,
+  ) => Effect.Effect<ReadonlyArray<ExecutionResult>, SandboxProviderError, CommandExecutor>
+  readonly stream: (
+    sandbox: Sandbox,
+    command: SandboxCommand,
+  ) => Stream.Stream<ProcessOutputChunk, SandboxProviderError, CommandExecutor>
+  readonly upload: (sandbox: Sandbox, localPath: string, remotePath: string) => Effect.Effect<void, SandboxProviderError>
+  readonly download: (sandbox: Sandbox, remotePath: string, localPath: string) => Effect.Effect<void, SandboxProviderError>
+  readonly destroy: (sandbox: Sandbox) => Effect.Effect<boolean, SandboxProviderError>
 }
 
 export class SandboxProvider extends Context.Tag("firegrid/runtime/durable-launch/SandboxProvider")<
@@ -107,16 +129,6 @@ export const defaultCapabilities = {
   gpu: false,
 } satisfies ProviderCapabilities
 
-export const getOrCreateSandbox = (
-  provider: SandboxProviderService,
-  config: SandboxConfig,
-): Effect.Effect<Sandbox, SandboxProviderError> =>
-  Effect.gen(function* () {
-    const labels = config.labels ?? {}
-    if (Object.keys(labels).length > 0) {
-      const existing = (yield* provider.listSandboxes(labels))
-        .find(sandbox => sandbox.state === "running")
-      if (existing !== undefined) return existing
-    }
-    return yield* provider.createSandbox(config)
-  })
+export const findRunningSandbox = (
+  sandboxes: ReadonlyArray<Sandbox>,
+): Sandbox | undefined => sandboxes.find(sandbox => sandbox.state === "running")
