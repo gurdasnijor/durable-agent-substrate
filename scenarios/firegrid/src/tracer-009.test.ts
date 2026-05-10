@@ -3,9 +3,11 @@ import {
   type DurableStreamsTestServerHandle,
 } from "@firegrid/durable-streams/test-utils"
 import {
-  RequiredActions,
-  RequiredActionRuntimeLive,
-  startRequiredAction,
+  FiregridRuntimeHostLive,
+  getHostRequiredAction,
+  hostRequiredActionRows,
+  resolveHostRequiredAction,
+  startHostRequiredAction,
 } from "@firegrid/runtime"
 import { Duration, Effect, Fiber } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
@@ -27,14 +29,16 @@ const createStreamUrl = async (name: string): Promise<string> => {
 }
 
 describe("firegrid tracer 009 required actions", () => {
-  it("firegrid-required-actions.RECORDS.1 firegrid-required-actions.RECORDS.2 firegrid-required-actions.RECORDS.3 firegrid-required-actions.WORKFLOW.1 firegrid-required-actions.WORKFLOW.2 firegrid-required-actions.WORKFLOW.3 firegrid-required-actions.WORKFLOW.4 firegrid-required-actions.WORKFLOW.5 firegrid-required-actions.BOUNDARY.1 firegrid-required-actions.BOUNDARY.2 firegrid-required-actions.BOUNDARY.3 firegrid-required-actions.BOUNDARY.4 proves required actions unblock through durable workflow state", async () => {
+  it("firegrid-required-actions.RECORDS.1 firegrid-required-actions.RECORDS.2 firegrid-required-actions.RECORDS.3 firegrid-required-actions.RECORDS.4 firegrid-required-actions.WORKFLOW.1 firegrid-required-actions.WORKFLOW.2 firegrid-required-actions.WORKFLOW.3 firegrid-required-actions.WORKFLOW.4 firegrid-required-actions.WORKFLOW.5 firegrid-required-actions.BOUNDARY.1 firegrid-required-actions.BOUNDARY.2 firegrid-required-actions.BOUNDARY.3 firegrid-required-actions.BOUNDARY.4 firegrid-required-actions.BOUNDARY.5 firegrid-architecture-boundary.SURFACE_AREA.6 proves required actions unblock through host-owned durable workflow state", async () => {
     const requiredActionStreamUrl = await createStreamUrl("tracer-009-required-action")
     const workflowStreamUrl = await createStreamUrl("tracer-009-workflow")
+    const controlPlaneStreamUrl = await createStreamUrl("tracer-009-control-plane")
+    const runtimeOutputStreamUrl = await createStreamUrl("tracer-009-runtime-output")
     const requiredActionId = `req_${crypto.randomUUID()}`
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const fiber = yield* Effect.fork(startRequiredAction({
+        const fiber = yield* Effect.fork(startHostRequiredAction({
           requiredActionId,
           runtimeContextId: "ctx_tracer_009",
           requestKind: "approval",
@@ -51,14 +55,13 @@ describe("firegrid tracer 009 required actions", () => {
           ],
         }))
 
-        const actions = yield* RequiredActions
-        let state = yield* actions.get(requiredActionId)
+        let state = yield* getHostRequiredAction(requiredActionId)
         while (state.request === undefined) {
           yield* Effect.sleep(Duration.millis(5))
-          state = yield* actions.get(requiredActionId)
+          state = yield* getHostRequiredAction(requiredActionId)
         }
 
-        yield* actions.resolve({
+        yield* resolveHostRequiredAction({
           requiredActionId,
           outcome: "approved",
           resolvedBy: "scenario:tracer-009",
@@ -67,14 +70,14 @@ describe("firegrid tracer 009 required actions", () => {
         })
 
         const decision = yield* Fiber.join(fiber)
-        const duplicate = yield* actions.resolve({
+        const duplicate = yield* resolveHostRequiredAction({
           requiredActionId,
           outcome: "approved",
           resolvedBy: "scenario:tracer-009",
           selectedOptionId: "approve",
           resolvedAt: "2026-05-09T00:00:00.000Z",
         })
-        const conflict = yield* actions.resolve({
+        const conflict = yield* resolveHostRequiredAction({
           requiredActionId,
           outcome: "denied",
           resolvedBy: "scenario:tracer-009",
@@ -86,13 +89,17 @@ describe("firegrid tracer 009 required actions", () => {
           decision,
           duplicate,
           conflict,
-          state: yield* actions.get(requiredActionId),
-          rows: yield* actions.rows,
+          state: yield* getHostRequiredAction(requiredActionId),
+          rows: yield* hostRequiredActionRows,
         }
       }).pipe(
-        Effect.provide(RequiredActionRuntimeLive({
-          requiredActionStreamUrl,
-          workflowStreamUrl,
+        Effect.provide(FiregridRuntimeHostLive({
+          streams: {
+            workflow: workflowStreamUrl,
+            controlPlane: controlPlaneStreamUrl,
+            runtimeOutput: runtimeOutputStreamUrl,
+            requiredActions: requiredActionStreamUrl,
+          },
           workerId: "tracer-009-worker",
         })),
       ),

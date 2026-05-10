@@ -293,6 +293,7 @@ console.error("diagnostic: tracer-002")
             workflow: workflowStreamUrl,
             controlPlane: controlPlaneStreamUrl,
             runtimeOutput: dataPlaneStreamUrl,
+            requiredActions: await createStreamUrl("runtime-host-required-actions"),
           },
         })),
       ),

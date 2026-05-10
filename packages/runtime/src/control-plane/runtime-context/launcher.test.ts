@@ -94,15 +94,16 @@ console.error("diagnostic: child stderr")
         contextId,
       }).pipe(
         // firegrid-durable-launch-runtime-operator.RUNTIME_HOST.1
-        // firegrid-durable-launch-runtime-operator.RUNTIME_HOST.2
-        // firegrid-durable-launch-runtime-operator.RUNTIME_HOST.3
-        Effect.provide(FiregridRuntimeHostLive({
-          streams: {
-            workflow: workflowStreamUrl,
-            controlPlane: controlPlaneStreamUrl,
-            runtimeOutput: dataPlaneStreamUrl,
-          },
-        })),
+	        // firegrid-durable-launch-runtime-operator.RUNTIME_HOST.2
+	        // firegrid-durable-launch-runtime-operator.RUNTIME_HOST.3
+	        Effect.provide(FiregridRuntimeHostLive({
+	          streams: {
+	            workflow: workflowStreamUrl,
+	            controlPlane: controlPlaneStreamUrl,
+	            runtimeOutput: dataPlaneStreamUrl,
+	            requiredActions: await createStreamUrl("runtime-host-required-actions"),
+	          },
+	        })),
       ),
     )
 
@@ -188,16 +189,17 @@ console.error("diagnostic: child stderr")
     )
 
     const result = await Effect.runPromise(
-      Effect.either(startRuntime({
-        contextId,
-      }).pipe(
-        Effect.provide(FiregridRuntimeHostLive({
-          streams: {
-            workflow: workflowStreamUrl,
-            controlPlane: controlPlaneStreamUrl,
-            runtimeOutput: dataPlaneStreamUrl,
-          },
-        })),
+	      Effect.either(startRuntime({
+	        contextId,
+	      }).pipe(
+	        Effect.provide(FiregridRuntimeHostLive({
+	          streams: {
+	            workflow: workflowStreamUrl,
+	            controlPlane: controlPlaneStreamUrl,
+	            runtimeOutput: dataPlaneStreamUrl,
+	            requiredActions: await createStreamUrl("runtime-host-required-actions"),
+	          },
+	        })),
       )),
     )
 

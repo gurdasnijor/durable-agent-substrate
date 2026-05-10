@@ -80,6 +80,7 @@ console.error("diagnostic: sandbox-slot")
             workflow: workflowStreamUrl,
             controlPlane: controlPlaneStreamUrl,
             runtimeOutput: dataPlaneStreamUrl,
+            requiredActions: await createStreamUrl("runtime-host-required-actions"),
           },
         })),
       ),

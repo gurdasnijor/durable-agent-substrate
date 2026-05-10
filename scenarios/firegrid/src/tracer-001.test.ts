@@ -72,6 +72,7 @@ console.error("diagnostic: client-to-runtime")
             workflow: workflowStreamUrl,
             controlPlane: controlPlaneStreamUrl,
             runtimeOutput: dataPlaneStreamUrl,
+            requiredActions: await createStreamUrl("runtime-host-required-actions"),
           },
         })),
       ),

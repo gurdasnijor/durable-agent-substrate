@@ -3,9 +3,14 @@
 ## Implemented Surface
 
 - `packages/runtime/src/required-action/**` contains the production required-action namespace.
+- `@firegrid/protocol/required-action` owns shared required-action request,
+  resolution, row, and state schemas.
 - Required-action request and resolution rows are durable retained JSON facts.
 - `RequiredActionWorkflow` records requested state, waits on an `@effect/workflow` `DurableDeferred`, and returns the durable resolution decision.
 - `RequiredActions.resolve(...)` records durable resolution state before completing the durable deferred token keyed by required action id.
+- `FiregridRuntimeHostLive` owns required-action stream topology through
+  `streams.requiredActions` and exposes host helpers for request, resolve, get,
+  and retained rows.
 
 ## API Gap
 
@@ -17,8 +22,8 @@ Timeout is reserved in the durable lifecycle as `timed_out`, but this tracer doe
 
 ## Directory Boundary
 
-Required actions live under `packages/runtime/src/required-action/**`. Stale `control-plane` and `data-plane` runtime directories were read for existing patterns only; they remain outside tracer 009 scope.
+Required actions live under `packages/runtime/src/required-action/**`, with durable record schemas exported from `packages/protocol/src/required-action/**`. `FiregridRuntimeHostLive` composes the required-action stream with the workflow stream; scenarios should use that host topology when crossing production runtime surfaces. Stale `control-plane` and `data-plane` runtime directories were read for existing patterns only; materialization/runtime directory moves remain outside Lane C scope.
 
-## Follow-Up Architecture Gap
+## Ownership Resolution
 
-Required-action protocol schema extraction and Durable Streams State descriptor design are intentionally deferred. Tracer 009 keeps raw retained required-action request and resolution facts in the runtime namespace so the PR remains focused on workflow wait and resolution semantics.
+Required-action protocol schema extraction is complete for `firegrid-required-actions.RECORDS.4` and `firegrid-required-actions.BOUNDARY.5`. Durable Streams State descriptor design remains deferred: the accepted current store shape is raw retained required-action request and resolution facts, with workflow authority in `@firegrid/runtime` and no dependency on session materialization.

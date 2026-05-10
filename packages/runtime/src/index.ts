@@ -10,6 +10,10 @@ export {
 export {
   FiregridRuntimeHost,
   FiregridRuntimeHostLive,
+  getHostRequiredAction,
+  hostRequiredActionRows,
+  resolveHostRequiredAction,
+  startHostRequiredAction,
   startRuntime,
   type RuntimeHostOptions,
   type RuntimeHostStreams,

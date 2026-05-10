@@ -1,6 +1,7 @@
 import { NodeContext } from "@effect/platform-node"
 import {
   DurableStreamsWorkflowEngine,
+  type WorkflowStateStoreError,
 } from "@firegrid/durable-streams"
 import { Context, Effect, Layer } from "effect"
 import {
@@ -26,11 +27,27 @@ import {
 import {
   asRuntimeContextError,
 } from "../control-plane/runtime-context/errors.ts"
+import {
+  RequiredActions,
+  RequiredActionsLive,
+} from "../required-action/service.ts"
+import {
+  startRequiredAction,
+} from "../required-action/launcher.ts"
+import type {
+  RequiredActionError,
+  RequiredActionRequest,
+  RequiredActionResolution,
+  RequiredActionResolveRequest,
+  RequiredActionRow,
+  RequiredActionState,
+} from "../required-action/schema.ts"
 
 export interface RuntimeHostStreams {
   readonly workflow: string
   readonly controlPlane: string
   readonly runtimeOutput: string
+  readonly requiredActions: string
 }
 
 export interface RuntimeHostOptions {
@@ -44,6 +61,19 @@ interface FiregridRuntimeHostService {
   readonly start: (
     options: StartRuntimeOptions,
   ) => Effect.Effect<StartRuntimeResult, RuntimeContextError>
+  readonly startRequiredAction: (
+    request: RequiredActionRequest,
+  ) => Effect.Effect<RequiredActionResolution, RequiredActionError | WorkflowStateStoreError>
+  readonly resolveRequiredAction: (
+    resolution: RequiredActionResolveRequest,
+  ) => Effect.Effect<RequiredActionResolution, RequiredActionError | WorkflowStateStoreError>
+  readonly getRequiredAction: (
+    requiredActionId: string,
+  ) => Effect.Effect<RequiredActionState, RequiredActionError | WorkflowStateStoreError>
+  readonly requiredActionRows: Effect.Effect<
+    ReadonlyArray<RequiredActionRow>,
+    RequiredActionError | WorkflowStateStoreError
+  >
 }
 
 export class FiregridRuntimeHost extends Context.Tag("firegrid/runtime/FiregridRuntimeHost")<
@@ -69,6 +99,19 @@ const runtimeContextLayer = (
     })),
     Layer.provide(LocalProcessSandboxProvider.layer()),
     Layer.provide(NodeContext.layer),
+  )
+
+const requiredActionLayer = (
+  options: RuntimeHostOptions,
+) =>
+  Layer.mergeAll(
+    RequiredActionsLive({
+      streamUrl: options.streams.requiredActions,
+    }),
+    DurableStreamsWorkflowEngine.layer({
+      streamUrl: options.streams.workflow,
+      ...(options.workerId === undefined ? {} : { workerId: options.workerId }),
+    }),
   )
 
 export const FiregridRuntimeHostLive = (
@@ -97,6 +140,26 @@ export const FiregridRuntimeHostLive = (
               )),
           }),
         ),
+      startRequiredAction: request =>
+        // firegrid-required-actions.BOUNDARY.5
+        // firegrid-architecture-boundary.SURFACE_AREA.6
+        startRequiredAction(request).pipe(
+          Effect.provide(requiredActionLayer(options)),
+        ),
+      resolveRequiredAction: resolution =>
+        RequiredActions.pipe(
+          Effect.flatMap(actions => actions.resolve(resolution)),
+          Effect.provide(requiredActionLayer(options)),
+        ),
+      getRequiredAction: requiredActionId =>
+        RequiredActions.pipe(
+          Effect.flatMap(actions => actions.get(requiredActionId)),
+          Effect.provide(requiredActionLayer(options)),
+        ),
+      requiredActionRows: RequiredActions.pipe(
+        Effect.flatMap(actions => actions.rows),
+        Effect.provide(requiredActionLayer(options)),
+      ),
     }),
   )
 
@@ -107,3 +170,46 @@ export const startRuntime = (
   FiregridRuntimeHost.pipe(
     Effect.flatMap(host => host.start(options)),
   )
+
+export const startHostRequiredAction = (
+  request: RequiredActionRequest,
+): Effect.Effect<
+  RequiredActionResolution,
+  RequiredActionError | WorkflowStateStoreError,
+  FiregridRuntimeHost
+> =>
+  FiregridRuntimeHost.pipe(
+    Effect.flatMap(host => host.startRequiredAction(request)),
+  )
+
+export const resolveHostRequiredAction = (
+  resolution: RequiredActionResolveRequest,
+): Effect.Effect<
+  RequiredActionResolution,
+  RequiredActionError | WorkflowStateStoreError,
+  FiregridRuntimeHost
+> =>
+  FiregridRuntimeHost.pipe(
+    Effect.flatMap(host => host.resolveRequiredAction(resolution)),
+  )
+
+export const getHostRequiredAction = (
+  requiredActionId: string,
+): Effect.Effect<
+  RequiredActionState,
+  RequiredActionError | WorkflowStateStoreError,
+  FiregridRuntimeHost
+> =>
+  FiregridRuntimeHost.pipe(
+    Effect.flatMap(host => host.getRequiredAction(requiredActionId)),
+  )
+
+export const hostRequiredActionRows:
+  Effect.Effect<
+    ReadonlyArray<RequiredActionRow>,
+    RequiredActionError | WorkflowStateStoreError,
+    FiregridRuntimeHost
+  > =
+    FiregridRuntimeHost.pipe(
+      Effect.flatMap(host => host.requiredActionRows),
+    )
