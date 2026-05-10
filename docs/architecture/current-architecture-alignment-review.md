@@ -2,9 +2,9 @@
 
 Date: 2026-05-10
 
-Branch: `firegrid/architecture-alignment-review`
+Branch: `firegrid/durable-streams-boundary-hardening`
 
-Base: `d55442e` (`origin/main`, after merged tracers 007, 009, and 011)
+Base: `8bceee9` (`origin/main`, after architecture stabilization blockers)
 
 ## Executive Summary
 
@@ -21,10 +21,11 @@ Base: `d55442e` (`origin/main`, after merged tracers 007, 009, and 011)
   `firegrid-architecture-boundary.DEPENDENCY_GRAPH.2`,
   `firegrid-architecture-boundary.DEPENDENCY_GRAPH.3`, and
   `firegrid-architecture-boundary.DEPENDENCY_GRAPH.6`.
-- Tracer 005 improved the Durable Streams boundary: current Firegrid packages
-  no longer import `@durable-streams/*` directly. The remaining direct
-  `@durable-streams/*` imports are in `apps/flamecast/**`, not reusable
-  Firegrid packages.
+- Stabilization Lane A hardened the Durable Streams boundary after tracer 005:
+  `@firegrid/durable-streams` now exposes narrow `./log`, `./state`,
+  `./producer`, and `./workflow-engine` subpaths; `@firegrid/client` imports
+  only browser-safe subpaths; and `packages/**`, `apps/**`, and `scenarios/**`
+  no longer import `@durable-streams/*` directly.
 - Tracer 006 created the production runtime host root at
   `packages/runtime/src/runtime-host/index.ts`. Scenarios now configure
   `FiregridRuntimeHostLive` instead of owning the runtime context Layer graph.
@@ -49,47 +50,45 @@ Base: `d55442e` (`origin/main`, after merged tracers 007, 009, and 011)
 - Agent ingress is still not implemented. Firegrid has durable runtime output
   but no durable, provider-neutral runtime input model yet. This is the main
   expected gap before real ACP/Claude/provider work.
-- The highest-priority actual risk is the `@firegrid/client` dependency on the
-  `@firegrid/durable-streams` root export. The graph shows that the client
-  reaches substrate modules that include workflow engine and producer surfaces,
-  which is too broad for `firegrid-platform-invariants.LOCALITY.2`.
+- The previous highest-priority actual risk, `@firegrid/client` reaching the
+  broad `@firegrid/durable-streams` root export, is resolved by narrow subpath
+  imports and dependency-cruiser guardrails for
+  `firegrid-platform-invariants.LOCALITY.2`,
+  `firegrid-platform-invariants.LOCALITY.7`,
+  `firegrid-architecture-boundary.DEPENDENCY_GRAPH.7`, and
+  `firegrid-architecture-boundary.DEPENDENCY_GRAPH.8`.
 
-These are not ordinary follow-up items. They are tracer-freeze blockers for
-the next wave unless the target architecture consciously accepts them:
+These remaining items are not ordinary follow-up items. They are tracer-freeze
+blockers for the next wave unless the target architecture consciously accepts
+them:
 
-1. Split browser-safe Durable Streams client helpers from the root
-   `@firegrid/durable-streams` export so `@firegrid/client` does not statically
-   reach workflow-engine, producer, or server-oriented substrate modules.
-2. Decide whether required-action state is raw retained facts for the medium
+1. Decide whether required-action state is raw retained facts for the medium
    term or should move into `@firegrid/protocol` descriptors plus
    `@firegrid/durable-streams` State Protocol adaptation before agent ingress
    and workflow-backed tools build on it.
-3. Add a tracer-008-specific scenario proof, or explicitly map tracer 002 and
+2. Add a tracer-008-specific scenario proof, or explicitly map tracer 002 and
    tracer 011 scenarios to tracer 008 acceptance. Today there is no
    `scenarios/firegrid/src/tracer-008.test.ts`.
-4. Decide the next materialization namespace step: keep
+3. Decide the next materialization namespace step: keep
    `@firegrid/runtime/data-plane/materialization/*` as staged public API and
    document it, or extract a dedicated `@firegrid/materialization` package.
-5. Run tracer 012 before real runtime adapters. Without durable agent ingress,
+4. Run tracer 012 before real runtime adapters. Without durable agent ingress,
    provider input will drift into command argv, stdin fixtures, or product
    protocol shortcuts.
 
 ## Tracer Freeze / Blockers
 
-Further feature tracers should pause until the following blockers are resolved
-or explicitly accepted in the target architecture. These blockers are not all
-bugs in current behavior: several are expected staged gaps. They are blockers
-because the next tracer wave would build permanent API, package, or durable
-schema dependencies on top of unsettled boundaries.
+Further feature tracers should pause until the remaining blockers are resolved
+or explicitly accepted in the target architecture. Stabilization Lane A resolves
+the Durable Streams substrate/browser-boundary blockers; the unresolved
+blockers below would still cause the next tracer wave to build permanent API,
+package, or durable schema dependencies on unsettled boundaries.
 
 | Blocker | Category | Blocks | Required decision or fix |
 | --- | --- | --- | --- |
-| Browser/client reachability through broad `@firegrid/durable-streams` root export. | Actual Deviation / Blocker | Tracer 012 agent ingress, provider adapter tracers, any client/open/observe surface hardening. | Split browser-safe Durable Streams entrypoints and make client imports narrow. |
-| Direct `@durable-streams/*` imports outside `@firegrid/durable-streams`, including `apps/flamecast`, unless explicitly exempted and guarded. | Actual Deviation / Blocker | Substrate package hardening, Flamecast migration, provider adapter tracers that rely on substrate isolation. | Replace the imports or document app exemption, then add mechanical dependency guardrails. |
 | Required-action durable schema/state ownership is runtime-local while ingress/tools are about to build on it. | Needs Decision / Blocker | Tracer 012 agent ingress and tracer 010 workflow-backed tools. | Decide whether required-action records move to `@firegrid/protocol` descriptors, remain runtime-local, or gain a projection target. |
 | Materialization lives under stale `@firegrid/runtime/data-plane/materialization/*` paths while becoming a core pluggable runtime-host strategy. | Needs Decision / Blocker | Materialize strategy tracer, runtime-host config work, future projection target packages. | Decide package/subpath/root ownership before adding more materialization production surfaces. |
 | Tracer 008 lacks a direct scenario E2E or explicit spec-approved coverage mapping. | Actual Deviation / Blocker | Future materialization strategy work and scenario coverage policy. | Add `tracer-008.test.ts` or document accepted coverage through tracer 002/011 in the tracer/spec. |
-| Mechanical dependency guardrails do not enforce Durable Streams import containment. | Actual Deviation / Blocker | All future substrate-facing tracers. | Add dependency-cruiser rules for `@durable-streams/*` imports and durable-streams client reachability. |
 
 ## Current Physical Architecture
 
@@ -98,13 +97,13 @@ schema dependencies on top of unsettled boundaries.
 | Package or app | Current responsibility | Important exports | Current dependency notes |
 | --- | --- | --- | --- |
 | `@firegrid/protocol` | Browser-safe schemas, helpers, cursors, and State Protocol descriptors for launch/runtime context and session projection targets. | `.`, `./launch`, `./session` | Depends only on `effect`; aligned shared base. |
-| `@firegrid/durable-streams` | Durable Streams substrate adapters: workflow engine, retained log helpers, idempotent producer, StreamDB state schema adaptation, test utilities. | `.`, `./test-utils` | Owns all direct `@durable-streams/*` imports inside packages. Root export is broad. |
-| `@firegrid/client` | Browser/app-facing launch and observation surface. Normalizes public launch input and reads retained snapshots. | `.` | Depends on `@firegrid/durable-streams` and `@firegrid/protocol`; no runtime edge. Root durable-streams import is the main browser-safety risk. |
+| `@firegrid/durable-streams` | Durable Streams substrate adapters: workflow engine, retained log helpers, idempotent producer, StreamDB state schema adaptation, test utilities. | `.`, `./log`, `./state`, `./producer`, `./workflow-engine`, `./test-utils` | Owns all direct `@durable-streams/*` imports. Browser/client consumers use narrow subpaths, not the broad root. |
+| `@firegrid/client` | Browser/app-facing launch and observation surface. Normalizes public launch input and reads retained snapshots. | `.` | Depends on `@firegrid/durable-streams/log`, `@firegrid/durable-streams/state`, and `@firegrid/protocol`; no runtime edge and no durable-streams root import. |
 | `@firegrid/runtime` | Node-tier runtime host, runtime context workflow, runtime output writer, materialization staging area, required-action workflow. | `.`, `./required-action`, `./data-plane/materialization`, `./data-plane/materialization/core`, `./data-plane/materialization/raw-fold`, `./data-plane/materialization/state-protocol`, `./data-plane/materialization/materialize` | Depends on Durable Streams, protocol, sandbox packages, Effect Platform, Workflow, SQL. No client edge. |
 | `@firegrid/sandboxes-core` | Provider-neutral sandbox contract and types. | `.` | Depends only on `effect`; aligned after tracer 007 boundary fix. |
 | `@firegrid/sandbox-local-process` | First sandbox provider implementation using Effect Platform local process execution. | `.` | Owns `@effect/platform`; depends on `@firegrid/sandboxes-core`. |
 | `@firegrid/scenario-firegrid` | Scenario-level E2E proofs for implemented tracers. | No public package exports. | Depends on client, runtime, protocol, durable-streams. |
-| `apps/flamecast` | Legacy/example app using Durable Streams and Firegrid-adjacent runtime code. | App, no package exports. | Still imports `@durable-streams/*` directly. This is outside package lint rules but creates migration drag. |
+| `apps/flamecast` | Legacy/example app using Firegrid Durable Streams wrappers and Firegrid-adjacent runtime code. | App, no package exports. | Uses `@firegrid/durable-streams/*` subpaths rather than direct `@durable-streams/*` imports. |
 
 ### Generated Graph Artifacts
 
@@ -128,46 +127,35 @@ Graph reading summary:
 - `@firegrid/runtime` imports `@firegrid/sandboxes-core` and
   `@firegrid/sandbox-local-process` only through the host/runtime context path,
   which is the intended post-tracer-007 shape.
-- The client graph shows `packages/client/src/firegrid.ts` importing the
-  `@firegrid/durable-streams` package root. Because the root re-exports
-  workflow-engine, producer, state, and log helpers, the graph expands from
-  client to several substrate modules. This is the clearest surprising edge.
+- The client graph now shows `packages/client/src/firegrid.ts` importing only
+  `@firegrid/durable-streams/log` and `@firegrid/durable-streams/state`.
+  Workflow-engine, producer, server, and test utility substrate modules are no
+  longer reachable from production client code.
 - The runtime detail graph shows expected internal coupling between
   `control-plane/runtime-context/workflow.ts`,
   `data-plane/runtime-output/writer.ts`, and `runtime-host/index.ts`.
 - The runtime control/data graph remains useful but increasingly stale in
   naming: materialization is still physically under `data-plane`, while
   required actions are now a sibling runtime namespace.
-- The Flamecast graph shows direct app imports of `@durable-streams/client`,
-  `@durable-streams/server`, and `@durable-streams/state` through
-  `apps/flamecast/src/runtime/*` and `apps/flamecast/src/shared/*`.
+- The Flamecast graph no longer shows direct app imports of
+  `@durable-streams/client`, `@durable-streams/server`, or
+  `@durable-streams/state`; it uses Firegrid Durable Streams subpaths.
 
 ### Surprising Edges And Direction Issues
 
-1. `@firegrid/client -> @firegrid/durable-streams` root:
-   - Files: `packages/client/src/firegrid.ts`,
-     `packages/durable-streams/src/index.ts`.
-   - Why surprising: client needs retained JSON reads and StreamDB state, but
-     package root also exposes Node-tier workflow-engine and producer helpers.
-   - Spec pressure: `firegrid-platform-invariants.LOCALITY.2`.
-
-2. `apps/flamecast -> @durable-streams/*` direct:
-   - Files: `apps/flamecast/src/runtime/main.ts`,
-     `apps/flamecast/src/runtime/agent-webhooks.test.mts`,
-     `apps/flamecast/src/shared/db.ts`,
-     `apps/flamecast/src/shared/state.ts`.
-   - Why surprising: tracer 005's package boundary is clean for packages, but
-     this app still models old substrate consumption.
-   - Spec pressure: target architecture says Durable Streams substrate should
-     be hidden by `@firegrid/durable-streams`; current dependency-cruiser rules
-     do not enforce this for apps.
-
-3. Scenario imports of `@firegrid/runtime/data-plane/materialization`:
+1. Scenario imports of `@firegrid/runtime/data-plane/materialization`:
    - Files: `scenarios/firegrid/src/tracer-002.test.ts`,
      `scenarios/firegrid/src/tracer-011.test.ts`.
    - Why surprising: scenarios use a stale `data-plane` runtime subpath for
      materialization. This is currently a declared staging path, not hidden
      source wiring.
+
+2. `@firegrid/durable-streams` broad root remains available:
+   - Files: `packages/durable-streams/src/index.ts`,
+     `packages/durable-streams/package.json`.
+   - Why surprising: the root is still broad for Node-tier convenience, but
+     browser/client consumers are now mechanically guarded away from it.
+   - Spec pressure: `firegrid-architecture-boundary.SURFACE_AREA.3`.
 
 ## Current Logical Architecture
 
@@ -213,8 +201,10 @@ separate production surfaces or not implemented.
 This is aligned with tracer 005 and
 `firegrid-architecture-boundary.AUTHORITY.4`.
 
-Current risk: the root export is not split by browser-safe versus Node-tier
-substrate roles.
+Current state: the package has browser-safe `./log` and `./state` subpaths,
+Node-tier `./producer` and `./workflow-engine` subpaths, and `./test-utils` for
+test server helpers. Dependency-cruiser guards keep `@firegrid/client` away
+from the broad root and Node-tier/test-only subpaths.
 
 ### Runtime Context And Control State
 
@@ -373,8 +363,9 @@ and Durable Streams State descriptor design.
 - app-facing `Firegrid.open(contextId).snapshot`;
 - retained snapshot reads across control plane and runtime-output journal.
 
-`@firegrid/client` does not import runtime code. The main client concern is its
-broad root import from `@firegrid/durable-streams`.
+`@firegrid/client` does not import runtime code or the broad Durable Streams
+root. It imports `@firegrid/durable-streams/log` for retained runtime-output
+reads and `@firegrid/durable-streams/state` for browser-safe StreamDB state.
 
 ### Planned But Not Implemented
 
@@ -391,8 +382,8 @@ pressure.
 
 | Area | Current implementation/files | Target/proposed design | Category | Severity | Blocks | Impact | Recommended next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Client imports Durable Streams root | `packages/client/src/firegrid.ts` imports from `@firegrid/durable-streams`; graph expands to workflow engine and producer exports through `packages/durable-streams/src/index.ts`. | Client should remain browser/edge safe and consume only narrow browser-safe retained-log/state helpers. Ref: `firegrid-platform-invariants.LOCALITY.2`. | Actual Deviation | Blocker | Tracer 012 agent ingress, provider adapter tracers, browser/client surface hardening. | Static root reachability makes Node-tier substrate APIs visible to the client package and risks browser bundle drift. | Add narrow subpath exports such as `@firegrid/durable-streams/log` and `@firegrid/durable-streams/state`, update client imports, and add a dependency-cruiser rule preventing client from reaching workflow engine/producer/test-utils. |
-| Flamecast direct Durable Streams imports | `apps/flamecast/src/runtime/main.ts`, `apps/flamecast/src/shared/db.ts`, `apps/flamecast/src/shared/state.ts`, `apps/flamecast/src/runtime/agent-webhooks.test.mts`; `apps/flamecast/package.json` depends on `@durable-streams/*`. | Target says Durable Streams substrate should be hidden by `@firegrid/durable-streams`; reusable packages already satisfy this. | Actual Deviation | Blocker unless exempted | Substrate package hardening, Flamecast migration, provider adapter tracers that rely on substrate isolation. | App remains on old substrate consumption model and can hide substrate-boundary regressions outside package lint. | Create a Flamecast cleanup PR or tracer that replaces direct Durable Streams imports with `@firegrid/durable-streams` helpers, or document why Flamecast is exempt and guard the exemption mechanically. |
+| Client Durable Streams reachability | `packages/client/src/firegrid.ts` imports from `@firegrid/durable-streams/log` and `@firegrid/durable-streams/state`; dependency-cruiser blocks the broad root and Node-tier/test-only subpaths. | Client should remain browser/edge safe and consume only narrow browser-safe retained-log/state helpers. Ref: `firegrid-platform-invariants.LOCALITY.2`, `firegrid-platform-invariants.LOCALITY.7`, `firegrid-architecture-boundary.DEPENDENCY_GRAPH.8`. | Aligned | Resolved by Lane A | Future client/open/observe surface hardening. | Production client code no longer statically reaches workflow-engine, producer, server, or test utility modules. | Keep the dependency-cruiser rules in place as merge criteria for future client work. |
+| Direct Durable Streams imports outside substrate | `rg '@durable-streams' packages apps scenarios` returns direct imports only inside `packages/durable-streams/**`; Flamecast uses Firegrid subpaths. | Direct imports of underlying Durable Streams packages stay contained by `@firegrid/durable-streams`. Ref: `firegrid-architecture-boundary.DEPENDENCY_GRAPH.7`. | Aligned | Resolved by Lane A | Substrate package hardening and provider adapter tracers. | The old app exemption is no longer needed. | Keep the containment dependency-cruiser rule and avoid reintroducing app-specific exemptions. |
 | Required-action durable state shape | `packages/runtime/src/required-action/schema.ts` and `service.ts` append/read raw retained required-action rows. | Required-action workflow authority is runtime-owned, but protocol/state ownership should be settled before cross-runtime clients and tools depend on it. Ref: `firegrid-required-actions.RECORDS.1`, `firegrid-required-actions.RECORDS.2`, `firegrid-required-actions.RECORDS.3`, `firegrid-required-actions.WORKFLOW.3`. | Needs Decision | Blocker | Tracer 012 agent ingress and tracer 010 workflow-backed tools. | Current behavior works, but ingress/tools will depend on required-action records; leaving ownership runtime-local by accident makes the future API harder to move. | Decide whether required-action row schemas/descriptors move into `@firegrid/protocol`, remain runtime-local by explicit architecture decision, or get a State Protocol projection target. |
 | Required actions not integrated into runtime host root | `RequiredActionRuntimeLive` is separate from `FiregridRuntimeHostLive`. | Runtime host should own host-wide workflow/state topology for runtime work, or required actions should be documented as a sibling runtime program. | Needs Decision | Blocker for ingress/tools | Tracer 012 agent ingress and tracer 010 workflow-backed tools. | Future agent ingress and workflow-backed tools may need both runtime context and required actions; separate roots can lead to duplicate stream topology config. | Decide whether `FiregridRuntimeHostLive` gains `requiredActions` stream config or whether required actions intentionally remain a sibling runtime program. |
 | Materialization remains under runtime `data-plane` subpaths | `packages/runtime/src/data-plane/materialization/**`; exported subpaths include `@firegrid/runtime/data-plane/materialization/*`. | Target architecture proposes `@firegrid/materialization` with core/state-protocol/raw-fold/materialize subpaths, while current runtime-host direction treats materialization as a pluggable strategy. | Needs Decision | Blocker | Materialize strategy tracer, runtime-host config work, future projection target packages. | Public API names are stale and tie materialization to runtime package internals while more strategy surfaces are about to accrete. | Decide before more materialization work: document staged runtime subpaths, rename runtime subpaths, or extract `@firegrid/materialization`. |
@@ -403,7 +394,7 @@ pressure.
 | ADR still references old sandbox runtime path | `docs/proposals/ADR_RUNTIME_CONTROL_PLANE_AND_DATA_PLANE_BOUNDARY.md` mentions `packages/runtime/src/data-plane/execution/sandbox/*`. | Tracer 007 moved sandbox to packages. | Documentation Drift | Non-blocking | None if documented. | Readers may think sandbox remains runtime-internal. | Update ADR with a "superseded by tracer 007" note rather than rewriting history. |
 | Runtime package has no package-level production root, but docs path is missing | Prompt referenced `docs/proposals/SDD_FIREGRID_RUNTIME_PACKAGE_HAS_NO_PRODUCTION_ROOT.md`; current main does not contain that file. | Target asks to avoid a broad umbrella root while keeping production composition surfaces. | Documentation Drift | Non-blocking | SDD review follow-up. | Reviewers lack the SDD source in current main; architecture arguments are split across target doc and tracer docs. | Restore/rename the SDD or add a short current-status note to `managed-agent-runtime-target.md`. |
 | Package manifests export TypeScript source | All packages export `./src/*.ts`; `files` points at `dist`, but root exports point at source. | `firegrid-platform-invariants.PACKAGE_DISCIPLINE.7` expects dist-only public package manifests for packed consumers. | Risk Accepted | Non-blocking until packaging lane | Package publication/packaging tracer. | Workspace development is fine, but publish/pack consumption will need a packaging pass. | Keep as accepted monorepo-stage risk until package publication tracer; do not mix with architecture tracer work. |
-| Dependency-cruiser does not enforce Durable Streams import containment | `.dependency-cruiser.cjs` enforces client/runtime/protocol/app direction but not "only durable-streams imports `@durable-streams/*`". | Tracer 005 boundary should be mechanically protected. Ref: `firegrid-architecture-boundary.AUTHORITY.4`. | Actual Deviation | Blocker | All future substrate-facing tracers. | Future app/package code can reintroduce direct substrate imports without failing `lint:deps`. | Add a rule scoped to `packages/**` immediately; decide whether apps are included after Flamecast migration or exempted with a documented allowlist. |
+| Dependency-cruiser Durable Streams guardrails | `.dependency-cruiser.cjs` now guards direct `@durable-streams/*` imports outside `packages/durable-streams` and blocks client reachability to broad/root Node-tier substrate paths. | Tracer 005 boundary should be mechanically protected. Ref: `firegrid-architecture-boundary.DEPENDENCY_GRAPH.7`, `firegrid-architecture-boundary.DEPENDENCY_GRAPH.8`. | Aligned | Resolved by Lane A | All future substrate-facing tracers. | `pnpm run lint:deps` now protects this boundary. | Keep app exemptions out unless target architecture explicitly accepts one and the rule encodes it. |
 
 ### Expected Gap Versus Tracer Blocker
 
@@ -449,20 +440,27 @@ Boundary risks:
 Exports:
 
 - `.`
+- `./log`
+- `./state`
+- `./producer`
+- `./workflow-engine`
 - `./test-utils`
 
 Matches intended boundary:
 
-- Yes for owning direct `@durable-streams/*` imports in reusable packages.
+- Yes for owning direct `@durable-streams/*` imports in packages, apps, and
+  scenarios.
+- `./log` and `./state` are the browser-safe substrate entrypoints currently
+  used by `@firegrid/client`.
+- `./producer` and `./workflow-engine` are Node-tier/runtime substrate
+  entrypoints.
 - `./test-utils` is appropriately separate from root.
 
 Boundary risks:
 
-- Root export is too broad for browser-safe consumers. It includes workflow
-  engine, state schema helpers, retained log helpers, producer helpers, and
-  workflow state store types in one entrypoint.
-- Because `@firegrid/client` imports the root, the generated client graph
-  reaches Node-tier substrate modules.
+- The root export remains broad for compatibility. This is acceptable only
+  because browser-safe consumers are expected to use subpaths and
+  dependency-cruiser blocks `@firegrid/client` from importing the root.
 
 ### `@firegrid/client`
 
@@ -472,13 +470,12 @@ Exports:
 
 Matches intended boundary:
 
-- Mostly. It exposes public Firegrid launch/open surfaces and depends on
-  protocol plus Durable Streams helpers. It has no runtime edge.
+- Yes for current launch/open scope. It exposes public Firegrid launch/open
+  surfaces and depends on protocol plus browser-safe Durable Streams subpaths.
+  It has no runtime edge.
 
 Boundary risks:
 
-- Root durable-streams import risks violating
-  `firegrid-platform-invariants.LOCALITY.2`.
 - It currently has no required-action resolve/observe operator API. That is a
   future decision, not a current bug.
 
@@ -549,9 +546,10 @@ Exports:
 
 Boundary risks:
 
-- Direct Durable Streams app imports remain.
-- The app is outside the current package dependency guardrails and can preserve
-  old architecture by accident.
+- Flamecast still models older product/runtime concerns, but not through direct
+  `@durable-streams/*` imports.
+- Durable Streams import containment guardrails include apps, so future direct
+  substrate imports must be intentionally exempted rather than accidental.
 
 ## Scenario / Production Surface Review
 
@@ -646,8 +644,8 @@ protocol <- client
 sandboxes-core <- sandbox-local-process <- runtime
 ```
 
-It also shows Flamecast as a separate app island with direct Durable Streams
-imports.
+It also shows Flamecast as a separate app island that now reaches Durable
+Streams through Firegrid subpaths rather than raw Durable Streams imports.
 
 Runtime graph:
 
@@ -670,10 +668,10 @@ Client graph:
 
 - [docs/dependency-graph-client.mmd](../dependency-graph-client.mmd)
 
-The client graph is small except for the durable-streams root expansion. A
-better graph cut would separate `@firegrid/durable-streams/log`,
-`@firegrid/durable-streams/state`, and
-`@firegrid/durable-streams/workflow-engine`.
+The client graph is small and now shows only
+`@firegrid/durable-streams/log` and `@firegrid/durable-streams/state`.
+A useful follow-up graph cut would assert browser-safe reachability from
+`packages/client/src/index.ts` stays within those subpaths.
 
 Protocol graph:
 
@@ -686,8 +684,9 @@ Flamecast graph:
 - [docs/dependency-graph-flamecast.mmd](../dependency-graph-flamecast.mmd)
 - [docs/dependency-graph-flamecast-detail.mmd](../dependency-graph-flamecast-detail.mmd)
 
-The Flamecast graph is useful as a migration warning: it shows app code still
-using raw Durable Streams APIs.
+The Flamecast graph no longer shows app code using raw Durable Streams APIs;
+remaining Flamecast concerns are product/runtime migration issues, not
+substrate import leaks.
 
 Recommended better graph cuts:
 
@@ -708,12 +707,10 @@ than review notes.
 
 Stabilization wave:
 
-1. Add narrow Durable Streams subpath exports and update `@firegrid/client` to
-   import only browser-safe retained-log/state helpers. Add dependency rules so
-   client cannot reach workflow engine, producer, server, or test utilities.
-   Include a dependency-cruiser rule for direct `@durable-streams/*` imports
-   outside `packages/durable-streams`; decide whether Flamecast is migrated or
-   explicitly exempted with an allowlist.
+1. Durable Streams browser-safe entrypoint cleanup is complete in
+   Stabilization Lane A: narrow subpaths exist, `@firegrid/client` imports only
+   `./log` and `./state`, Flamecast no longer imports `@durable-streams/*`
+   directly, and dependency-cruiser guards the boundary.
 2. Decide the materialization namespace/package/root strategy. Either keep
    `@firegrid/runtime/data-plane/materialization/*` as a documented staged API,
    rename runtime subpaths, or extract `@firegrid/materialization`. Do this
@@ -729,19 +726,19 @@ Stabilization wave:
 
 Recommended next 3-5 load-bearing tracers or PRs:
 
-1. **Durable Streams browser-safe entrypoint cleanup**: not a new architecture
-   tracer, but a boundary-hardening PR for `firegrid-platform-invariants.LOCALITY.2`.
-2. **Required-action protocol/state ownership cleanup**: move schemas to
+1. **Required-action protocol/state ownership cleanup**: move schemas to
    protocol or explicitly document runtime-local ownership as the accepted
    model; decide raw facts vs State Protocol projection.
-3. **Tracer 012 agent ingress**: implement durable input request and delivery
+2. **Tracer 012 agent ingress**: implement durable input request and delivery
    progress before real provider adapters.
-4. **Materialize strategy adapter / materialization package decision**: finish
+3. **Materialize strategy adapter / materialization package decision**: finish
    `firegrid-materialization-engines.MATERIALIZE.5` and decide package
    extraction.
-5. **Tracer 010 workflow-backed tools**: after ingress and required-action
+4. **Tracer 010 workflow-backed tools**: after ingress and required-action
    topology are stable, expose durable tools like `sleep`, `wait_for`, and
    `spawn`.
+5. **Package publication/export hardening**: address dist-only package exports
+   when workspace packages are ready for packed downstream consumption.
 
 ## Future Tracer Merge Criteria
 
@@ -776,8 +773,8 @@ Target architecture doc updates needed:
 - Add a current-status note that materialization is staged under
   `@firegrid/runtime/data-plane/materialization/*` until package extraction
   earns itself.
-- Update the Durable Streams section to recommend browser-safe subpaths instead
-  of a broad root import for all consumers.
+- Keep the Durable Streams section explicit that browser/client consumers use
+  browser-safe subpaths instead of the broad root.
 - Add a note that required actions are currently runtime-local after tracer
   009, with schema/state ownership intentionally deferred.
 - Restore or replace the missing

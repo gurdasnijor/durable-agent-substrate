@@ -95,7 +95,7 @@ packages/runtime/src/control-plane/workflow-engine/state.ts
 Expected public surface:
 
 ```ts
-import { DurableStreamsWorkflowEngine } from "@firegrid/durable-streams"
+import { DurableStreamsWorkflowEngine } from "@firegrid/durable-streams/workflow-engine"
 
 const WorkflowEngineLive = DurableStreamsWorkflowEngine.layer({
   streamUrl,
@@ -204,7 +204,7 @@ scenario or smoke entry point that already exists.
 The shape should be close to:
 
 ```ts
-import { DurableStreamsWorkflowEngine } from "@firegrid/durable-streams"
+import { DurableStreamsWorkflowEngine } from "@firegrid/durable-streams/workflow-engine"
 import { RuntimeContext } from "@firegrid/runtime"
 
 const Live = Layer.mergeAll(

@@ -111,14 +111,14 @@ packages/client/**          -> no direct @durable-streams/* imports
 packages/protocol/**        -> no direct @durable-streams/* imports
 packages/runtime/**         -> no direct @durable-streams/* imports
 scenarios/**                -> no direct @durable-streams/* imports
-apps/flamecast/**           -> still has legacy direct @durable-streams/* imports
+apps/flamecast/**           -> no direct @durable-streams/* imports after
+                               Stabilization Lane A
 ```
 
-Remaining direct Durable Streams imports outside `packages/durable-streams` are
-limited to the pre-existing Flamecast app storage/runtime files listed in
-Remaining Gaps. They were not migrated in tracer 005 because this pass is
-scoped to Firegrid packages, scenarios, and the runtime workflow-engine
-extraction.
+Tracer 005 originally deferred the pre-existing Flamecast app storage/runtime
+imports. Stabilization Lane A completed that migration by routing Flamecast
+through `@firegrid/durable-streams` subpaths and adding dependency-cruiser
+guardrails.
 
 ## Package Dependency Changes
 
@@ -160,7 +160,7 @@ const Live = RuntimeContextWorkflowLayer.pipe(
 After:
 
 ```ts
-import { DurableStreamsWorkflowEngine } from "@firegrid/durable-streams"
+import { DurableStreamsWorkflowEngine } from "@firegrid/durable-streams/workflow-engine"
 
 const Live = RuntimeContextWorkflowLayer.pipe(
   Layer.provideMerge(DurableStreamsWorkflowEngine.layer({
@@ -264,17 +264,9 @@ unbuilt `@firegrid/runtime` CLI binary.
 
 ## Remaining Gaps
 
-Pre-existing Flamecast app files still import `@durable-streams/*` directly:
-
-- `apps/flamecast/src/shared/db.ts`
-- `apps/flamecast/src/shared/state.ts`
-- `apps/flamecast/src/runtime/main.ts`
-- `apps/flamecast/src/runtime/agent-webhooks.test.mts`
-
-`apps/flamecast/package.json` also still declares direct Durable Streams
-dependencies. These are outside the tracer 005 runtime package extraction scope
-and should be handled by a separate Flamecast storage-boundary pass if the
-target boundary is extended from Firegrid packages/scenarios to all apps.
+The original tracer 005 Flamecast direct-import gap is closed by Stabilization
+Lane A. Remaining Durable Streams substrate work is now about maintaining the
+subpath boundary and deciding any future substrate APIs before exporting them.
 
 The remaining intentional thinness is `createDurableStateDb`, which still
 returns a StreamDB-shaped object. That is acceptable for tracer 005 because the

@@ -149,17 +149,21 @@ packages/
 ## Substrate Package
 
 `@firegrid/durable-streams` owns Durable Streams substrate concerns, analogous
-to `@effect/cluster` owning cluster-backed implementations.
+to `@effect/cluster` owning cluster-backed implementations. Browser-safe
+consumers use narrow public subpaths; the broad root is not an app/client
+entrypoint.
 
 Expected public services:
 
-- `DurableStreamsWorkflowEngine`: Durable Streams-backed implementation of
-  `@effect/workflow`'s `WorkflowEngine`;
-- `DurableStreamLog`: append/read/tail retained stream events without exposing
-  `DurableStream`;
-- `DurableStreamProducer`: `IdempotentProducer` wrapper with standard producer
-  identity, batching, flush, detach, and error handling;
-- `DurableState`: StreamDB/createStreamDB-backed state lifecycle;
+- `@firegrid/durable-streams/log`: append/read/tail retained stream events
+  without exposing `DurableStream`;
+- `@firegrid/durable-streams/state`: browser-safe StreamDB/createStreamDB-backed
+  state lifecycle helpers and Firegrid protocol descriptor adaptation;
+- `@firegrid/durable-streams/producer`: Node/runtime-tier `IdempotentProducer`
+  wrapper with standard producer identity, batching, flush, detach, and error
+  handling;
+- `@firegrid/durable-streams/workflow-engine`: Durable Streams-backed
+  implementation of `@effect/workflow`'s `WorkflowEngine`;
 - `DurableStateProtocol`: State Protocol change writer/encoder over Durable
   Streams;
 - `DurableCursor`: cursor/offset helpers and retained-read boundaries.

@@ -10,100 +10,86 @@ subgraph 4["runtime-context"]
 7["ids.ts"]
 8["launcher.ts"]
 9["workflow.ts"]
-12["schema.ts"]
-13["service.ts"]
+Q["schema.ts"]
+R["service.ts"]
 end
 end
 subgraph A["data-plane"]
 subgraph B["runtime-output"]
 C["writer.ts"]
 end
-subgraph 18["materialization"]
-subgraph 19["core"]
-1A["EventProjector.ts"]
-1C["EventSource.ts"]
-1D["MaterializationStrategy.ts"]
-1E["ProjectionDefinition.ts"]
-1F["Query.ts"]
-1G["index.ts"]
+subgraph W["materialization"]
+subgraph X["core"]
+Y["EventProjector.ts"]
+10["EventSource.ts"]
+11["MaterializationStrategy.ts"]
+12["ProjectionDefinition.ts"]
+13["Query.ts"]
+14["index.ts"]
 end
-1B["event-pipeline.ts"]
-1H["index.ts"]
-1I["materialize-pipeline.ts"]
-1J["pipeline-source-options.ts"]
-subgraph 1K["projectors"]
-1L["index.ts"]
-1M["runtime-output-session-projector.ts"]
+Z["event-pipeline.ts"]
+15["index.ts"]
+16["materialize-pipeline.ts"]
+17["pipeline-source-options.ts"]
+subgraph 18["projectors"]
+19["index.ts"]
+1A["runtime-output-session-projector.ts"]
 end
-1N["runtime-output-source.ts"]
-subgraph 1O["sinks"]
-subgraph 1P["materialize"]
-1Q["index.ts"]
-1R["materialize-sink.ts"]
+1B["runtime-output-source.ts"]
+subgraph 1D["sinks"]
+subgraph 1E["materialize"]
+1F["index.ts"]
+1G["materialize-sink.ts"]
 end
-subgraph 24["state-protocol"]
-25["index.ts"]
-26["state-protocol-writer.ts"]
+subgraph 1T["state-protocol"]
+1U["index.ts"]
+1V["state-protocol-writer.ts"]
 end
-27["index.ts"]
+1W["index.ts"]
 end
-subgraph 1S["materialize"]
-1T["index.ts"]
-1U["materialize-provider.ts"]
-1V["materialize-types.ts"]
+subgraph 1H["materialize"]
+1I["index.ts"]
+1J["materialize-provider.ts"]
+1K["materialize-types.ts"]
 end
-subgraph 1W["raw-fold"]
-1X["index.ts"]
-1Y["RawFoldStrategy.ts"]
+subgraph 1L["raw-fold"]
+1M["index.ts"]
+1N["RawFoldStrategy.ts"]
 end
-1Z["session-pipeline.ts"]
-20["session-projection-definition.ts"]
-subgraph 21["state-protocol"]
-22["index.ts"]
-23["StateProtocolStrategy.ts"]
+1O["session-pipeline.ts"]
+1P["session-projection-definition.ts"]
+subgraph 1Q["state-protocol"]
+1R["index.ts"]
+1S["StateProtocolStrategy.ts"]
 end
-28["session-state-change.ts"]
+1X["session-state-change.ts"]
 end
 end
 end
 end
 subgraph D["durable-streams"]
 subgraph E["src"]
-F["index.ts"]
-G["DurableState.ts"]
-T["DurableStreamLog.ts"]
-U["DurableStreamProducer.ts"]
-V["DurableStreamsWorkflowEngine.ts"]
-subgraph W["internal"]
-subgraph X["workflow"]
-Y["clock.ts"]
-Z["state.ts"]
-10["engine-runtime.ts"]
-11["codec.ts"]
+F["producer.ts"]
+G["DurableStreamProducer.ts"]
+H["DurableStreamLog.ts"]
+1C["log.ts"]
+end
+end
+subgraph I["protocol"]
+subgraph J["src"]
+subgraph K["launch"]
+L["index.ts"]
+M["cursor.ts"]
+N["helpers.ts"]
+O["schema.ts"]
+P["state.ts"]
 end
 end
 end
-end
-subgraph H["protocol"]
-subgraph I["src"]
-subgraph J["launch"]
-K["index.ts"]
-L["cursor.ts"]
-M["helpers.ts"]
-N["schema.ts"]
-O["state.ts"]
-end
-subgraph P["session"]
-Q["index.ts"]
-R["schema.ts"]
-S["state.ts"]
-end
-end
-end
-subgraph 14["sandboxes-core"]
-subgraph 15["src"]
-16["index.ts"]
-17["SandboxProvider.ts"]
+subgraph S["sandboxes-core"]
+subgraph T["src"]
+U["index.ts"]
+V["SandboxProvider.ts"]
 end
 end
 end
@@ -114,82 +100,69 @@ end
 9-->5
 9-->6
 9-->7
-9-->12
-9-->13
-9-->K
-9-->16
+9-->Q
+9-->R
+9-->L
+9-->U
 C-->F
-C-->K
+C-->L
 F-->G
-F-->T
-F-->U
-F-->V
-G-->K
-G-->Q
-K-->L
-K-->M
-K-->N
-K-->O
-O-->N
-Q-->R
-Q-->S
-S-->R
-U-->T
-V-->Y
-V-->10
-V-->Z
+G-->H
+L-->M
+L-->N
+L-->O
+L-->P
+P-->O
+R-->7
+U-->V
 Y-->Z
-10-->11
 10-->Z
-13-->7
+14-->Y
+14-->10
+14-->11
+14-->12
+14-->13
+15-->14
+15-->Z
+15-->16
+15-->1I
+15-->19
+15-->1M
+15-->1B
+15-->1O
+15-->1P
+15-->1W
+15-->1R
+16-->Z
 16-->17
-1A-->1B
-1C-->1B
-1G-->1A
-1G-->1C
-1G-->1D
-1G-->1E
-1G-->1F
-1H-->1G
-1H-->1B
-1H-->1I
-1H-->1T
-1H-->1L
-1H-->1X
-1H-->1N
-1H-->1Z
-1H-->20
-1H-->27
-1H-->22
-1I-->1B
+16-->19
+16-->1B
+16-->1F
+19-->Z
+19-->1A
+1A-->Z
+1A-->L
+1B-->Z
+1B-->1C
+1B-->L
+1C-->H
+1F-->1G
+1G-->Z
+1G-->1I
+1G-->L
 1I-->1J
-1I-->1L
-1I-->1N
-1I-->1Q
-1L-->1B
-1L-->1M
-1M-->1B
-1M-->K
-1N-->1B
-1N-->F
-1N-->K
-1Q-->1R
-1R-->1B
-1R-->1T
-1R-->K
-1T-->1U
-1T-->1V
+1I-->1K
+1J-->1K
+1M-->1N
+1N-->14
+1N-->Z
+1O-->1P
+1O-->1R
+1R-->1S
+1S-->14
+1S-->Z
+1S-->1U
 1U-->1V
-1X-->1Y
-1Y-->1G
-1Y-->1B
-1Z-->20
-1Z-->22
-22-->23
-23-->1G
-23-->1B
-23-->25
-25-->26
-26-->F
-27-->1Q
-27-->25
+1V-->F
+1W-->1F
+1W-->1U

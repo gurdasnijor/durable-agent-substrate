@@ -24,70 +24,84 @@ F["DurableStreamProducer.ts"]
 G["DurableStreamsWorkflowEngine.ts"]
 H["index.ts"]
 I["internal"]
-J["test-utils.ts"]
-K["testing"]
+J["log.ts"]
+K["producer.ts"]
+L["state.ts"]
+M["test-utils.ts"]
+N["testing"]
+O["workflow-engine.ts"]
 end
 end
-subgraph L["protocol"]
-subgraph M["src"]
-N["index.ts"]
-O["launch"]
-P["session"]
+subgraph P["protocol"]
+subgraph Q["src"]
+R["index.ts"]
+S["launch"]
+T["session"]
 end
 end
-subgraph Q["runtime"]
-subgraph R["src"]
-S["control-plane"]
-T["data-plane"]
-U["index.ts"]
-V["required-action"]
-W["runtime-host"]
+subgraph U["runtime"]
+subgraph V["src"]
+W["control-plane"]
+X["data-plane"]
+Y["index.ts"]
+Z["required-action"]
+10["runtime-host"]
 end
 end
-subgraph X["sandbox-local-process"]
-subgraph Y["src"]
-Z["LocalProcessSandboxProvider.ts"]
-10["index.ts"]
-end
-end
-subgraph 11["sandboxes-core"]
+subgraph 11["sandbox-local-process"]
 subgraph 12["src"]
-13["SandboxProvider.ts"]
+13["LocalProcessSandboxProvider.ts"]
 14["index.ts"]
+end
+end
+subgraph 15["sandboxes-core"]
+subgraph 16["src"]
+17["SandboxProvider.ts"]
+18["index.ts"]
 end
 end
 end
 3-->5
 4-->5
-4-->H
-9-->H
-9-->O
+4-->O
+4-->J
+4-->M
+5-->L
+9-->J
+9-->L
+9-->S
 A-->9
-D-->O
-D-->P
+D-->S
+D-->T
 F-->E
 G-->I
 H-->D
 H-->E
 H-->F
 H-->G
-J-->K
-K-->E
-N-->O
-N-->P
-S-->T
-S-->O
-S-->14
-T-->H
-T-->O
-U-->S
-U-->V
-U-->W
-V-->H
+J-->E
+K-->F
+L-->D
+M-->N
+N-->E
+O-->G
+R-->S
+R-->T
+W-->X
 W-->S
-W-->T
-W-->H
-W-->10
-Z-->14
-10-->Z
+W-->18
+X-->K
+X-->S
+X-->J
+Y-->W
+Y-->Z
+Y-->10
+Z-->O
+Z-->J
+10-->W
+10-->X
+10-->O
+10-->14
+13-->18
 14-->13
+18-->17
