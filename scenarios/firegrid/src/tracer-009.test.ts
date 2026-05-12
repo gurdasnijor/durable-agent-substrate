@@ -1,13 +1,18 @@
+import { FetchHttpClient } from "@effect/platform"
+import {
+  DurableStreamsWorkflowEngine,
+} from "@firegrid/durable-streams/workflow-engine"
 import {
   startDurableStreamsTestServer,
   type DurableStreamsTestServerHandle,
 } from "@firegrid/durable-streams/test-utils"
 import {
   RequiredActions,
-  RequiredActionRuntimeLive,
+  RequiredActionsLive,
+  RequiredActionWorkflowLayer,
   startRequiredAction,
 } from "@firegrid/runtime"
-import { Duration, Effect, Fiber } from "effect"
+import { Duration, Effect, Fiber, Layer } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 let server: DurableStreamsTestServerHandle | undefined
@@ -31,6 +36,16 @@ describe("firegrid tracer 009 required actions", () => {
     const requiredActionStreamUrl = await createStreamUrl("tracer-009-required-action")
     const workflowStreamUrl = await createStreamUrl("tracer-009-workflow")
     const requiredActionId = `req_${crypto.randomUUID()}`
+    const requiredActionLayer = RequiredActionWorkflowLayer.pipe(
+      Layer.provideMerge(Layer.mergeAll(
+        RequiredActionsLive({ streamUrl: requiredActionStreamUrl }),
+        DurableStreamsWorkflowEngine.layer({
+          streamUrl: workflowStreamUrl,
+          workerId: "tracer-009-worker",
+        }),
+        FetchHttpClient.layer,
+      )),
+    )
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -90,11 +105,7 @@ describe("firegrid tracer 009 required actions", () => {
           rows: yield* actions.rows,
         }
       }).pipe(
-        Effect.provide(RequiredActionRuntimeLive({
-          requiredActionStreamUrl,
-          workflowStreamUrl,
-          workerId: "tracer-009-worker",
-        })),
+        Effect.provide(requiredActionLayer),
       ),
     )
 

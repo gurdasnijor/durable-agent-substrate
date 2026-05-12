@@ -3,7 +3,7 @@ import {
   DurableDeferred,
   type WorkflowEngine,
 } from "@effect/workflow"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { DurableStream } from "effect-durable-streams"
 import {
   requiredActionRequestedRowId,
@@ -12,7 +12,6 @@ import {
 import {
   RequiredActionRequestedRowSchema,
   RequiredActionResolutionSchema,
-  RequiredActionResolveRequestSchema,
   RequiredActionResolvedRowSchema,
   RequiredActionRowSchema,
   type RequiredActionRequest,
@@ -126,6 +125,10 @@ const getRequiredActionState = (
   streamUrl: string,
   requiredActionId: string,
 ): Effect.Effect<RequiredActionState, RequiredActionError, HttpClient.HttpClient> =>
+  // TODO(required-action): replace this retained collect/fold with a
+  // DurableTable projection. Lane A removes the mini-root and runtime-operators
+  // dependency first; keeping this query-local fold avoids mixing projection
+  // migration into the demolition PR.
   readRequiredActionRows(streamUrl).pipe(
     Effect.map(rows => foldRequiredActionState(requiredActionId, rows)),
   )
@@ -164,7 +167,7 @@ export const RequiredActionsLive = (
             return existing.request
           }
 
-          const row = Schema.decodeUnknownSync(RequiredActionRequestedRowSchema)({
+          const row = RequiredActionRequestedRowSchema.make({
             type: "firegrid.required_action.requested",
             id: requiredActionRequestedRowId(request.requiredActionId),
             at: nowIso(),
@@ -193,10 +196,9 @@ export const RequiredActionsLive = (
         }),
       resolve: resolution =>
         Effect.gen(function* () {
-          const requested = Schema.decodeUnknownSync(RequiredActionResolveRequestSchema)(resolution)
-          const decoded = Schema.decodeUnknownSync(RequiredActionResolutionSchema)({
-            ...requested,
-            resolvedAt: requested.resolvedAt ?? nowIso(),
+          const decoded = RequiredActionResolutionSchema.make({
+            ...resolution,
+            resolvedAt: resolution.resolvedAt ?? nowIso(),
           })
           const existing = yield* getRequiredActionState(
             options.streamUrl,
@@ -211,7 +213,7 @@ export const RequiredActionsLive = (
               : existing.resolution
           }
 
-          const row = Schema.decodeUnknownSync(RequiredActionResolvedRowSchema)({
+          const row = RequiredActionResolvedRowSchema.make({
             type: "firegrid.required_action.resolved",
             id: requiredActionResolvedRowId(decoded.requiredActionId),
             at: decoded.resolvedAt,

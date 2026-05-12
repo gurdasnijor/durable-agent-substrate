@@ -1,15 +1,19 @@
 import { FetchHttpClient } from "@effect/platform"
 import {
+  DurableStreamsWorkflowEngine,
+} from "@firegrid/durable-streams/workflow-engine"
+import {
   startDurableStreamsTestServer,
   type DurableStreamsTestServerHandle,
 } from "@firegrid/durable-streams/test-utils"
-import { Duration, Effect, Fiber } from "effect"
+import { Duration, Effect, Fiber, Layer } from "effect"
 import { DurableStream } from "effect-durable-streams"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
   RequiredActions,
-  RequiredActionRuntimeLive,
+  RequiredActionsLive,
   RequiredActionRowSchema,
+  RequiredActionWorkflowLayer,
   requiredActionResolvedRowId,
   startRequiredAction,
 } from "./index.ts"
@@ -29,6 +33,22 @@ const createStreamUrl = async (name: string): Promise<string> => {
   if (!server) throw new Error("server not started")
   return server.createStreamUrl(name)
 }
+
+const requiredActionLive = (options: {
+  readonly requiredActionStreamUrl: string
+  readonly workflowStreamUrl: string
+  readonly workerId: string
+}) =>
+  RequiredActionWorkflowLayer.pipe(
+    Layer.provideMerge(Layer.mergeAll(
+      RequiredActionsLive({ streamUrl: options.requiredActionStreamUrl }),
+      DurableStreamsWorkflowEngine.layer({
+        streamUrl: options.workflowStreamUrl,
+        workerId: options.workerId,
+      }),
+      FetchHttpClient.layer,
+    )),
+  )
 
 describe("required-action workflow", () => {
   it("firegrid-required-actions.RECORDS.1 firegrid-required-actions.RECORDS.2 firegrid-required-actions.RECORDS.3 firegrid-required-actions.WORKFLOW.1 firegrid-required-actions.WORKFLOW.2 firegrid-required-actions.WORKFLOW.3 firegrid-required-actions.BOUNDARY.1 firegrid-required-actions.BOUNDARY.2 firegrid-required-actions.BOUNDARY.3 firegrid-required-actions.BOUNDARY.4 records a durable request and resumes from durable resolution", async () => {
@@ -76,7 +96,7 @@ describe("required-action workflow", () => {
           rows,
         }
       }).pipe(
-        Effect.provide(RequiredActionRuntimeLive({
+        Effect.provide(requiredActionLive({
           requiredActionStreamUrl,
           workflowStreamUrl,
           workerId: "required-action-test-worker",
@@ -150,7 +170,7 @@ describe("required-action workflow", () => {
           rows,
         }
       }).pipe(
-        Effect.provide(RequiredActionRuntimeLive({
+        Effect.provide(requiredActionLive({
           requiredActionStreamUrl,
           workflowStreamUrl,
           workerId: "required-action-idempotency-worker",
@@ -218,7 +238,7 @@ describe("required-action workflow", () => {
           rows: yield* actions.rows,
         }
       }).pipe(
-        Effect.provide(RequiredActionRuntimeLive({
+        Effect.provide(requiredActionLive({
           requiredActionStreamUrl,
           workflowStreamUrl,
           workerId: "required-action-retry-wake-worker",

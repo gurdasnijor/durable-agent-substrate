@@ -129,8 +129,8 @@ interface RuntimeOperator<Fact, Payload, Error, Requirements> {
 }
 ```
 
-The current snapshot-array `OperatorSource.scan` shape is acceptable as a
-minimal tracer 013 proof. The target operator source should be stream-native so
+The snapshot-array `OperatorSource.scan` tracer proof is historical. Current
+operator sources should use `effect-durable-operators.ConsumerSource` so
 retained scans and live follow do not collapse into `collect -> array -> loop`
 unless the fold actually needs a retained snapshot.
 
@@ -166,9 +166,7 @@ const RuntimeHostLive = FiregridRuntimeHostLive({
       ingress: env.FIREGRID_RUNTIME_INGRESS_STREAM_URL,
       checkpoints: env.FIREGRID_RUNTIME_INPUT_CHECKPOINTS_STREAM_URL,
     }),
-    requiredActions: env.FIREGRID_REQUIRED_ACTION_STREAM_URL,
     schedules: env.FIREGRID_SCHEDULE_STREAM_URL,
-    operatorProgress: env.FIREGRID_OPERATOR_PROGRESS_STREAM_URL,
   },
   workflowEngine: DurableStreamsWorkflowEngine.layer({
     streamUrl: env.FIREGRID_WORKFLOW_STREAM_URL,
@@ -178,7 +176,8 @@ const RuntimeHostLive = FiregridRuntimeHostLive({
     projections: [sessionProjection(), requiredActionProjection()],
   }),
   operators: [
-    requiredActionOperator(),
+    // Future generic effect-durable-operators consumers live here.
+    // Do not add required-action-specific mini roots.
     runtimeIngressDeliveryOperator(),
     scheduledPromptOperator(),
     childSpawnOperator(),
@@ -257,11 +256,8 @@ packages/
         schema.ts
         ids.ts
         rows.ts
-      runtime-operators/
-        OperatorDescriptor.ts
-        OperatorRuntime.ts
-        OperatorSource.ts
-        progress.ts
+      # runtime-operators/ was deleted after tracer 017/018; use the
+      # generic effect-durable-operators package for durable consumers.
       runtime-waits/
         schema.ts
         matchers.ts
@@ -593,12 +589,13 @@ or historical scaffolding:
   along with `docs/tracers/015-stream-native-runtime-loop-validation.md` and
   `features/firegrid/stream-native-runtime-loop.feature.yaml`. Listed here
   for historical reference; the surface no longer exists.
-- Snapshot-array `OperatorSource.scan`: acceptable tracer 013 proof, but target
-  sources should be stream-native where live/no-gap behavior matters.
-- `RequiredActionsLive`, `RequiredActionRuntimeLive`, and
-  `RequiredActionStateLive`: may stay if explicitly accepted as a domain API,
-  but should not be copied as a generic service pattern for waits, ingress, or
-  runtime output.
+- Snapshot-array `OperatorSource.scan` and `packages/runtime/src/runtime-operators/**`:
+  DELETED in the required-action/operator cleanup lane. Use
+  `effect-durable-operators.ConsumerSource` and `DurableConsumer`.
+- `RequiredActionRuntimeLive` and `RequiredActionStateLive`: DELETED in the
+  required-action/operator cleanup lane. `RequiredActionsLive` remains a domain
+  row service, but should not be copied as a generic service pattern for waits,
+  ingress, or runtime output.
 - `docs/proposals/SDD_EFFECT_NATIVE_DURABLE_STREAMS_PRODUCTION_CUTOVER.md`
   examples that mention `runtime-ingress/stream.ts`,
   `runtime-ingress/folds.ts`, or `runtime-output/stream.ts`: those were
