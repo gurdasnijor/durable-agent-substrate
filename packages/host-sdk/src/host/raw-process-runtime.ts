@@ -1,7 +1,5 @@
 import {
-  RuntimeOutputTable,
   hostOwnedStreamUrl,
-  runtimeContextOutputStreamUrl,
 } from "@firegrid/protocol/launch"
 import type {
   RuntimeAgentProtocol,
@@ -39,6 +37,7 @@ import {
   type SandboxProviderError,
 } from "@firegrid/runtime/sources/sandbox"
 import { RuntimeHostConfig } from "./config.ts"
+import { perContextRuntimeOutputTableLayer } from "./per-context-runtime-output.ts"
 
 // firegrid-runtime-boundary-reconciliation.HOST_SPLIT.1
 // Raw local-process execution and output-row construction live outside the
@@ -66,22 +65,6 @@ const mapRuntimeContextSurfaceError = (
         contextId,
         cause,
       ))
-
-const runtimeContextOutputTableLayer = (
-  hostConfig: RuntimeHostConfig["Type"],
-  context: RuntimeContext,
-) =>
-  RuntimeOutputTable.layer({
-    streamOptions: {
-      url: runtimeContextOutputStreamUrl({
-        baseUrl: hostConfig.durableStreamsBaseUrl,
-        prefix: context.host.streamPrefix,
-        contextId: context.contextId,
-      }),
-      contentType: "application/json",
-      ...(hostConfig.headers === undefined ? {} : { headers: hostConfig.headers }),
-    },
-  })
 
 const sandboxSupervisorCommandTableLayer = (
   hostConfig: RuntimeHostConfig["Type"],
@@ -175,7 +158,7 @@ const runCodecRuntimeContext = (options: {
     protocol: options.protocol,
   }).pipe(
     Effect.provide(RuntimeOutputJournalLayer),
-    Effect.provide(runtimeContextOutputTableLayer(options.hostConfig, options.context)),
+    Effect.provide(perContextRuntimeOutputTableLayer(options.hostConfig, options.context)),
     Effect.provide(RuntimeIngressAppenderLayer({
       currentContextId: options.context.contextId,
     })),
@@ -191,7 +174,7 @@ export const runRuntimeContext = (
   // firegrid-workflow-driven-runtime.BOUNDARIES.1
   Effect.gen(function* () {
     const hostConfig = yield* RuntimeHostConfig
-    const outputLayer = runtimeContextOutputTableLayer(hostConfig, context)
+    const outputLayer = perContextRuntimeOutputTableLayer(hostConfig, context)
     const sandboxCommandLayer = sandboxSupervisorCommandTableLayer(hostConfig, context)
 
     const protocol = agentProtocolForContext(context)
