@@ -105,13 +105,22 @@ const failReactHook = (error: unknown): never => {
   throw error
 }
 
-export interface DurableTableProviderProps<E> {
+export interface DurableTableProviderProps<ROut, E> {
   readonly children?: ReactNode
   readonly fallback?: ReactNode
-  // ROut erased to `unknown` at this seam: the layer's precise provided
-  // identities are resolved per-tag by string key below and re-narrowed
-  // at `useDurableTable` (TFIND-044 Option B — see `AnyDurableTableTag`).
-  readonly layer: Layer.Layer<unknown, E, never>
+  // TFIND-050 (c1, SDD §0.1): `ROut` is a free, per-call,
+  // inference-only generic, DECOUPLED from `tables`. TFIND-044's root
+  // defect was `layer` and `tables` SHARING one `ROut`; #348 removed
+  // `ROut` entirely (collapsing this to a scalar — broke the
+  // explicit-props path with `unknown`, relocated breakage with
+  // `never`; see §0.1 Evidence). Here `ROut` is inferred from the
+  // actual layer at each call site (no scalar, no contravariance trap,
+  // no package-graph ripple); `tables` stays the erased
+  // `AnyDurableTableTag` aggregate. The provider runtime is
+  // ROut-agnostic (resolves tags by string key into
+  // `ReadonlyMap<string, unknown>`); consumers re-narrow per tag at
+  // `useDurableTable`.
+  readonly layer: Layer.Layer<ROut, E, never>
   readonly onError?: (error: unknown) => void
   readonly tables: ReadonlyArray<AnyDurableTableTag>
 }
@@ -122,8 +131,8 @@ const closeScope = (scope: Scope.CloseableScope): void => {
   void Effect.runPromise(Scope.close(scope, Exit.void))
 }
 
-const acquireServices = <E>(options: {
-  readonly layer: Layer.Layer<unknown, E, never>
+const acquireServices = <ROut, E>(options: {
+  readonly layer: Layer.Layer<ROut, E, never>
   readonly tables: ReadonlyArray<AnyDurableTableTag>
 }): Effect.Effect<
   {
@@ -156,8 +165,8 @@ const acquireServices = <E>(options: {
  * Builds the supplied DurableTable layer once for this provider lifetime and
  * closes the backing Effect Scope when the provider unmounts.
  */
-export function DurableTableProvider<E>(
-  props: DurableTableProviderProps<E>,
+export function DurableTableProvider<ROut, E>(
+  props: DurableTableProviderProps<ROut, E>,
 ): ReactNode {
   const [state, setState] = useState<DurableTableReactState>({ status: "loading" })
   const [initialOptions] = useState(() => ({
