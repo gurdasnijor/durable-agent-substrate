@@ -77,6 +77,10 @@ These are intentionally not agent event-pipeline stages:
   primitive.
 - `workflow-engine/`: workflow substrate adapter
   (`firegrid-runtime-boundary-reconciliation.NAMESPACE_BOUNDARY.4`).
+- `workflows/`: runtime-owned workflow definitions: workflow names, payload
+  schemas, success/error schemas, and idempotency/execution-id helpers. Host
+  packages install live workflow Layers and provide topology; they do not own
+  workflow definitions.
 - `agent-tools/`: tool schemas, lowering, MCP exposure, and host-coupled live
   services.
 - `agent-adapters/`: projections over codec sessions

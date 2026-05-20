@@ -452,6 +452,7 @@ This inventory is the review checklist for the post-`#250` tree.
 | `agent-adapters/` | Projections/adapters over codec sessions | Acceptable sibling surface. Keep out of durable runtime pipeline. | Adapter projection only. | No |
 | `source-registration/` | Provider-owned source registration layers | Target shape after host observation glue extraction. | Registers named observation sources for `wait_for`. | No |
 | `workflow-engine/` | Workflow engine adapter/substrate | Separate substrate boundary. Do not fold into agent runtime pipeline. | Runtime substrate dependency. | No |
+| `workflows/` | Runtime-owned workflow definitions | Target shape for the host-sdk/runtime binding line. | Owns workflow names, payload schemas, success/error schemas, and execution-id helpers; host-sdk installs live workflow Layers. | No |
 | `verified-webhook-ingest/` | External ingress/source adapter | Separate ingest surface. Audit later for generic durable operator overlap. | Adjacent ingest surface. | No |
 
 This table describes the current flat tree. The namespace target above is the
@@ -640,6 +641,23 @@ Target:
 - do not move runtime host concerns into `workflow-engine/`;
 - do not move generic workflow-engine internals into runtime host modules;
 - keep version-coupled Effect/workflow adapter changes as standalone work.
+
+### `workflows/`
+
+Role: runtime-owned workflow definitions.
+
+Workflow definitions sit below the host-sdk/runtime binding line. This folder
+owns workflow names, payload schemas, success/error schemas, and deterministic
+execution/idempotency helpers. Host packages may register these workflows,
+install live Layers, and supply host topology, but the definitions themselves
+belong to `@firegrid/runtime`.
+
+Target:
+
+- keep workflow definitions free of `@firegrid/host-sdk` imports;
+- invert any host callback through runtime-owned capability tags with
+  host-provided Live Layers;
+- keep workflow execution substrate concerns in `workflow-engine/`, not here.
 
 ### `verified-webhook-ingest/`
 
