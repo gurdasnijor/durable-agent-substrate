@@ -29,7 +29,7 @@
  *  - firegrid-workflow-driven-runtime.PHASE_4_TEMPORAL_WORKFLOWS.1..3
  */
 
-import { DurableClock, type WorkflowEngine } from "@effect/workflow"
+import { DurableClock, WorkflowEngine } from "@effect/workflow"
 import { Prompt } from "@effect/ai"
 import {
   ExecuteToolInputSchema,
@@ -77,12 +77,13 @@ import {
   type AgentOutputEvent,
 } from "@firegrid/runtime/events"
 import {
-  WaitFor,
-  type DurableWaitRowLookup,
-  type DurableWaitRowUpsert,
   type FieldEqualsTrigger,
 } from "@firegrid/runtime/durable-tools"
 import { AgentToolHost } from "./tool-host.ts"
+import {
+  WaitForWorkflow,
+  waitForWorkflowExecutionId,
+} from "./wait-for-workflow.ts"
 import {
   toolErrorResult,
   toolExecutionFailed,
@@ -170,16 +171,13 @@ const runSleepTool = (
   }).pipe(Effect.as<SleepToolOutput>({ slept: true }))
 
 const runWaitForTool = (
+  ctx: ToolLoweringContext,
   toolUseId: string,
   input: WaitForToolInput,
 ): Effect.Effect<
   WaitForToolOutput,
   ToolError,
-  | WorkflowEngine.WorkflowEngine
-  | WorkflowEngine.WorkflowInstance
-  | DurableWaitRowLookup
-  | DurableWaitRowUpsert
-  | Scope.Scope
+  WorkflowEngine.WorkflowEngine
 > => {
   // `whereFields` is typed `Record<string, unknown>` because schema-level
   // scalar refinement would prevent codecs from publishing the JSON shape
@@ -234,17 +232,19 @@ const runWaitForTool = (
         "waitQuery.whereFields must include a string `contextId` predicate for AgentOutput waits: runtime output is observed per runtime context.",
     })
   }
-  return WaitFor.match({
-    name: `tool:${toolUseId}`,
-    source: input.waitQuery.source,
-    trigger: adapted.trigger,
-    ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+  const executionId = waitForWorkflowExecutionId(ctx.contextId, toolUseId)
+  return Effect.gen(function* () {
+    const engine = yield* WorkflowEngine.WorkflowEngine
+    return yield* engine.execute(WaitForWorkflow, {
+      executionId,
+      payload: {
+        executionId,
+        source: input.waitQuery.source,
+        trigger: adapted.trigger,
+        ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+      },
+    })
   }).pipe(
-    Effect.map((outcome): WaitForToolOutput =>
-      outcome._tag === "Match"
-        ? { matched: true, event: outcome.row }
-        : { matched: false, timedOut: true },
-    ),
     Effect.mapError((cause) =>
       toolExecutionFailed(toolUseId, "wait_for", cause),
     ),
@@ -484,8 +484,6 @@ const runExecuteTool = (
 type ToolEnvironment =
   | WorkflowEngine.WorkflowEngine
   | WorkflowEngine.WorkflowInstance
-  | DurableWaitRowLookup
-  | DurableWaitRowUpsert
   | Scope.Scope
   | AgentToolHost
 
@@ -575,7 +573,7 @@ export const toolUseToEffect = (
       )
     case "wait_for":
       return dispatchTool(event, "wait_for", WaitForToolInputSchema, (input) =>
-        runWaitForTool(event.part.id, input),
+        runWaitForTool(ctx, event.part.id, input),
       )
     case "spawn":
       return dispatchTool(event, "spawn", SpawnToolInputSchema, (input) =>
