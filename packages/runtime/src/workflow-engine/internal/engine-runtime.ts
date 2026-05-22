@@ -158,6 +158,44 @@ export const makeWorkflowEngine = (
       }
     })
 
+    // Restart recovery sweep for NON-clock suspensions (S1 / tf-12q9). A body
+    // parked on a table-wait `Workflow.suspend` (no DurableDeferred mailbox)
+    // has no wakeup row to re-arm, so `recoverPendingClockWakeups` never re-drives
+    // it — the asymmetry S1 confirmed empirically (clocks auto-recover, table
+    // waits don't). This is the symmetric mechanism: re-`resume` every active
+    // suspended execution (no finalResult, not interrupted) at least once so any
+    // workflow-owned input that became durable before/during the crash is
+    // processed on reconstruction.
+    //
+    // Driven from `register` rather than at construction because `resume`
+    // requires the workflow's execute fn (`workflows.get(name)`), and workflows
+    // register AFTER the engine layer is built (the engine is their dependency).
+    // Construction-time the map is empty; registration is the first point the
+    // execute fn exists, and it runs on every construction/reconstruction.
+    const recoverSuspendedExecutions = (workflowName: string) =>
+      Effect.gen(function* () {
+        const parked = yield* orDieTable(table.executions.query((coll) =>
+          coll.toArray.filter(row =>
+            row.workflowName === workflowName
+            && row.suspended === true
+            && row.finalResult === undefined
+            && row.interrupted !== true),
+        ))
+        let index = 0
+        while (index < parked.length) {
+          const row = parked[index]!
+          yield* resume(row.executionId)
+          index += 1
+        }
+      }).pipe(
+        Effect.withSpan("firegrid.workflow_engine.execution.recover_suspended", {
+          kind: "internal",
+          attributes: {
+            "firegrid.workflow.name": workflowName,
+          },
+        }),
+      )
+
     const isExecutionInterrupted = (executionId: string) =>
       orDieTable(table.executions.get(executionId).pipe(
         Effect.map(row => Option.getOrUndefined(row)?.interrupted === true),
@@ -259,6 +297,10 @@ export const makeWorkflowEngine = (
             execute,
             scope: yield* Effect.scope,
           })
+          // Restart recovery sweep (tf-12q9): re-drive any suspended executions
+          // of this workflow that survived a crash. Symmetric with the clock
+          // wakeup recovery, but gated on registration so the execute fn exists.
+          yield* recoverSuspendedExecutions(workflow.name)
         }).pipe(
           Effect.withSpan("firegrid.workflow_engine.workflow.register", {
             kind: "internal",
