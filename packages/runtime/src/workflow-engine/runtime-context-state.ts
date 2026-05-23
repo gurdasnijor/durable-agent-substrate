@@ -30,18 +30,23 @@ import {
   runtimeContextOutputStreamUrl,
   type RuntimeContext,
 } from "@firegrid/protocol/launch"
-import {
-  RuntimeIngressInputRowSchema,
-} from "@firegrid/protocol/runtime-ingress"
 import { runtimeAgentOutputObservationFromRow } from "@firegrid/protocol/session-facade"
 import type { DurableTableHeaders } from "effect-durable-operators"
 import { DurableTable } from "effect-durable-operators"
 import { Context, Effect, Layer, Option, Ref, Schema, type Scope } from "effect"
+import { type RuntimeAgentOutputObservation } from "../agent-event-pipeline/events/index.ts"
+// Pure state schema lives under `events/runtime-context-state.ts` (Shape C
+// cutover physical target tree). This file owns the durable table + store
+// authority around that schema; the schema itself is import-only.
 import {
-  AgentInputEventSchema,
-  type RuntimeAgentOutputObservation,
-} from "../agent-event-pipeline/events/index.ts"
-import { RuntimeExitEvidence as RuntimeExitEvidenceSchema } from "./workflows/runtime-context-run.ts"
+  RuntimeContextEventStateSchema,
+  initialRuntimeContextEventState,
+  type RuntimeContextEventState,
+} from "../events/runtime-context-state.ts"
+export {
+  initialRuntimeContextEventState,
+  type RuntimeContextEventState,
+} from "../events/runtime-context-state.ts"
 
 // ---------------------------------------------------------------------------
 // Sparse state-relevance predicate.
@@ -84,35 +89,12 @@ export const isStateRelevantOutputObservation = (
 }
 
 // ---------------------------------------------------------------------------
-// Loop state (moved from workflows/runtime-context.ts so the durable row and
-// the body share one schema source of truth).
-// ---------------------------------------------------------------------------
-
-const PendingPermissionResponseSchema = Schema.Struct({
-  permissionRequestId: Schema.String,
-  row: RuntimeIngressInputRowSchema,
-  event: AgentInputEventSchema,
-})
-export type PendingPermissionResponse = Schema.Schema.Type<typeof PendingPermissionResponseSchema>
-
-export const RuntimeContextEventStateSchema = Schema.Struct({
-  lastProcessedInputSequence: Schema.Number,
-  lastProcessedOutputSequence: Schema.Number,
-  pendingPermissionRequests: Schema.Array(Schema.String),
-  pendingPermissionResponses: Schema.Array(PendingPermissionResponseSchema),
-  exitEvidence: Schema.optional(RuntimeExitEvidenceSchema),
-})
-export type RuntimeContextEventState = Schema.Schema.Type<typeof RuntimeContextEventStateSchema>
-
-export const initialRuntimeContextEventState: RuntimeContextEventState = {
-  lastProcessedInputSequence: -1,
-  lastProcessedOutputSequence: -1,
-  pendingPermissionRequests: [],
-  pendingPermissionResponses: [],
-}
-
-// ---------------------------------------------------------------------------
 // Durable state table (workflow-private; one row per (contextId, attempt)).
+//
+// The pure state schema (`RuntimeContextEventStateSchema`,
+// `PendingPermissionResponseSchema`, `initialRuntimeContextEventState`) lives
+// under `../events/runtime-context-state.ts` and is re-exported above. This
+// section owns the table/store wiring around that schema.
 // ---------------------------------------------------------------------------
 
 const stateKey = (contextId: string, activityAttempt: number): string =>
