@@ -15,9 +15,6 @@ import type {
 } from "@firegrid/protocol/agent-tools"
 import { Context, Duration, Effect, Layer } from "effect"
 import type {
-  RuntimeObservationSource,
-} from "../../streams/index.ts"
-import type {
   FieldEqualsTrigger,
 } from "../../transforms/field-equals.ts"
 export {
@@ -38,20 +35,24 @@ export interface RuntimeToolExecutionContext {
   readonly toolUseId: string
 }
 
+// streams/wait-child-output deletion: `source: RuntimeObservationSource` was
+// the `RuntimeObservationStreams` discriminator. WaitForWorkflow now resolves
+// the source through `RuntimeChannelRouter` directly, so callers pass the
+// channel target string (the wait_for tool input's `channel`) and the
+// FieldEqualsTrigger predicate.
 export interface RuntimeWaitForToolExecutionParams
   extends RuntimeToolExecutionContext
 {
   readonly input: WaitForToolInput
-  readonly source: RuntimeObservationSource
+  readonly channel: string
   readonly trigger: FieldEqualsTrigger
 }
 
 export interface RuntimeWaitForAnyDescriptorExecution {
   readonly channel: string
-  // tf-0xe4: serializable observation source + trigger (was an in-memory
-  // `wait` Effect). wait_for_any now races these inside the durable
-  // WaitForWorkflow Activity instead of an in-memory Effect.raceAll.
-  readonly source: RuntimeObservationSource
+  // tf-0xe4: serializable trigger paired with the channel target. The
+  // WaitForWorkflow Activity races each (channel, trigger) over the same
+  // RuntimeChannelRouter every other wait/child-output dispatch uses.
   readonly trigger: FieldEqualsTrigger
 }
 
@@ -153,7 +154,7 @@ const toolExecutionFailed = (
 })
 
 // tf-0xe4: wait_for_any over the durable WaitForWorkflow. The N descriptor
-// sources are raced inside one journaled workflow Activity (primary +
+// channels are raced inside one journaled workflow Activity (primary +
 // additionalSources), so an in-flight wait_for_any survives host restart. The
 // workflow returns the winning source's index; map it back to the channel.
 const waitForAny = (
@@ -169,10 +170,9 @@ const waitForAny = (
   }
   return WaitForWorkflow.execute({
     executionKey: `wait-any:${contextId}:${toolUseId}`,
-    source: primary.source,
-    trigger: primary.trigger,
+    source: { channel: primary.channel, trigger: primary.trigger },
     additionalSources: rest.map(descriptor => ({
-      source: descriptor.source,
+      channel: descriptor.channel,
       trigger: descriptor.trigger,
     })),
     ...waitForTimeoutPayload(input.timeoutMs),
@@ -210,11 +210,10 @@ export const makeRuntimeAgentToolExecutionService =
         Effect.as<SleepToolOutput>({ slept: true }),
         hideExecutionRequirements,
       ),
-    waitFor: ({ contextId, toolUseId, input, source, trigger }) =>
+    waitFor: ({ contextId, toolUseId, input, channel, trigger }) =>
       WaitForWorkflow.execute({
         executionKey: `wait:${contextId}:${toolUseId}`,
-        source,
-        trigger,
+        source: { channel, trigger },
         ...waitForTimeoutPayload(input.timeoutMs),
       }).pipe(
         Effect.provide(WaitForWorkflowLayer),

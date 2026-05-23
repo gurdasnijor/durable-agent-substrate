@@ -9,13 +9,17 @@ import {
   VerifiedWebhookFactSchema,
 } from "@firegrid/protocol/verified-webhook"
 import {
-  CallerOwnedFactStreams,
-} from "@firegrid/runtime/streams"
-import {
   VerifiedWebhookFactTable,
   type VerifiedWebhookFactTableService,
 } from "@firegrid/runtime/verified-webhook-ingest"
 import { Effect, Layer, Schema, Stream } from "effect"
+
+// wait/child-output streams deletion: `VerifiedWebhookFactCallerOwnedFactStreamsLive`
+// is gone. It adapted this channel's binding stream into `CallerOwnedFactStreams`
+// for the deleted `RuntimeObservationStreams` aggregator. The agent's
+// `wait_for` tool now resolves channels through `RuntimeChannelRouter`
+// directly, and `VerifiedWebhookFactChannelLive` is registered as a route on
+// that router by host composition — no adapter required.
 
 export const verifiedWebhookFactRows = <S extends Schema.Schema.AnyNoContext>(
   table: VerifiedWebhookFactTableService,
@@ -53,21 +57,3 @@ export const VerifiedWebhookFactChannelLive = Layer.effect(
     })
   }),
 )
-
-export const VerifiedWebhookFactCallerOwnedFactStreamsLive: Layer.Layer<
-  CallerOwnedFactStreams,
-  never,
-  VerifiedWebhookFactChannel
-> =
-  Layer.effect(
-    CallerOwnedFactStreams,
-    Effect.gen(function*() {
-      const channel = yield* VerifiedWebhookFactChannel
-      return CallerOwnedFactStreams.of({
-        streamFor: stream =>
-          stream === String(channel.target)
-            ? channel.binding.stream
-            : Stream.empty,
-      })
-    }),
-  )

@@ -13,10 +13,6 @@ import {
   verifiedWebhookFactTableLayerOptions,
 } from "@firegrid/runtime/verified-webhook-ingest"
 import type { AgentOutputEvent, ToolResultEvent } from "@firegrid/runtime/events"
-import {
-  CallerOwnedFactStreams,
-  RuntimeObservationStreams,
-} from "@firegrid/runtime/streams"
 import { RuntimeAgentToolExecutionLive } from "@firegrid/runtime/tool-executor"
 import { WaitForWorkflowLayer } from "@firegrid/runtime/workflows"
 import { DurableStreamsWorkflowEngine } from "@firegrid/runtime/workflow-engine"
@@ -26,7 +22,6 @@ import {
   channelMetadata,
   makeRuntimeContextChannelRouter,
   RuntimeChannelRouter,
-  VerifiedWebhookFactCallerOwnedFactStreamsLive,
   verifiedWebhookFactChannel,
 } from "../../src/host/index.ts"
 import {
@@ -35,6 +30,14 @@ import {
 } from "../../src/agent-tools/execution/tool-host.ts"
 import { toolUseToEffect } from "../../src/agent-tools/execution/tool-use-to-effect.ts"
 import { toolExecutionFailed } from "../../src/agent-tools/bindings/tool-error.ts"
+
+// wait/child-output streams deletion: this test previously composed both the
+// `VerifiedWebhookFactCallerOwnedFactStreamsLive` bridge and a synthetic
+// `RuntimeObservationStreams` Live. Both were the `RuntimeObservationStreams`
+// -> `CallerOwnedFactStreams` -> channel resolver chain. After the deletion
+// the agent's `wait_for` tool dispatches through `RuntimeChannelRouter`
+// directly, and the verified-webhook channel registration IS the route — no
+// adapter required.
 
 let server: DurableStreamTestServer | undefined
 let baseUrl: string | undefined
@@ -163,21 +166,6 @@ const VerifiedWebhookFactRouterLive = Layer.unwrapEffect(
     )),
 )
 
-const VerifiedWebhookRuntimeObservationStreamsLive = Layer.effect(
-  RuntimeObservationStreams,
-  Effect.gen(function*() {
-    const callerOwnedFactStreams = yield* CallerOwnedFactStreams
-    return {
-      agentOutput: Stream.empty,
-      agentOutputAfter: () => Stream.empty,
-      initialAgentOutputAfter: () => Effect.succeed(Option.none()),
-      agentOutputForContext: () => Stream.empty,
-      runtimeRun: Stream.empty,
-      callerFact: callerOwnedFactStreams.streamFor,
-    }
-  }),
-)
-
 const VerifiedWebhookFactChannelLinearProjectionLive = Layer.effect(
   VerifiedWebhookFactChannel,
   Effect.gen(function*() {
@@ -198,8 +186,6 @@ const runWithVerifiedWebhookLayer = <A, E>(
         Effect.provide(
           RuntimeAgentToolExecutionLive.pipe(
             Layer.provideMerge(WaitForWorkflowLayer),
-            Layer.provideMerge(VerifiedWebhookRuntimeObservationStreamsLive),
-            Layer.provideMerge(VerifiedWebhookFactCallerOwnedFactStreamsLive),
             Layer.provideMerge(VerifiedWebhookFactRouterLive),
             Layer.provideMerge(VerifiedWebhookFactChannelLinearProjectionLive),
             Layer.provideMerge(AgentToolHost.layer(fakeHost())),

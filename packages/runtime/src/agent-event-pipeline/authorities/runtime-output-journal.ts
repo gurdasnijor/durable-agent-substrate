@@ -9,11 +9,18 @@ import {
   type RuntimeAgentOutputObservation,
   runtimeAgentOutputObservationFromRow,
 } from "../events/index.ts"
-import type { RuntimeObservationSource } from "../../streams/sources.ts"
-
 export type { RuntimeAgentOutputObservation } from "../events/index.ts"
 
-type AgentOutputAfterSource = Extract<RuntimeObservationSource, { readonly _tag: "AgentOutputAfter" }>
+// wait/child-output streams deletion: this type was extracted from the deleted
+// `RuntimeObservationSource` discriminator. Inlined here as a struct shape so
+// the per-context `RuntimeAgentOutputAfterEvents` service stays decoupled from
+// the (now-gone) source-variant catalog.
+interface AgentOutputAfterSource {
+  readonly _tag: "AgentOutputAfter"
+  readonly contextId: string
+  readonly activityAttempt: number
+  readonly afterSequence: number
+}
 
 interface RuntimeAgentOutputAfterEventsService {
   readonly initial: (

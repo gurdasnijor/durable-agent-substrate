@@ -262,11 +262,12 @@ const namespaceScopedLayer = (
 // written per-context by `PerContextRuntimeOutputWriter`
 // (`{prefix}.runtimeOutput.context.{contextId}`), so nothing writes
 // this stream. It exists only to satisfy a *structural* dependency:
-// `RuntimeObservationStreamsLive` resolves `RuntimeAgentOutputEvents`
-// (`RuntimeAgentOutputEventsLayer` → ambient `RuntimeOutputTable`) as a
-// hard requirement, and the wait router's now-dead host-wide
-// `agentOutput` fallback reads it. The live `AgentOutput` path is
-// per-context (see `wait-router.ts` / `runtime-wait-streams.ts`).
+// `RuntimeAgentOutputEventsLayer` resolves the ambient `RuntimeOutputTable`
+// as a hard requirement (previously also fronted by the deleted
+// `RuntimeObservationStreamsLive` aggregator). The live per-context
+// `AgentOutput` observation path lives under the per-context output
+// substrate; this host-wide stream remains structurally required by the
+// `RuntimeOutputTable` Tag itself.
 // Removing this layer is gated on reshaping that structural dependency.
 // See docs/research/host-vs-context-boundary-audit.md §A4.
 const hostOwnedOutputLayer = (

@@ -1,11 +1,14 @@
 import { WorkflowEngine } from "@effect/workflow"
 import { DurableStreamTestServer } from "@durable-streams/server"
-import { Effect, Layer, Option, Stream } from "effect"
+import { makeIngressChannel } from "@firegrid/protocol/channels"
+import { Effect, Layer, Schema, Stream } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
-  RuntimeObservationStreams,
-  type RuntimeObservationStreamsService,
-} from "../../../src/streams/index.ts"
+  RuntimeChannelRouter,
+  makeRuntimeChannelRouter,
+  runtimeRouteFromChannel,
+  type RuntimeChannelRoute,
+} from "../../../src/channels/router.ts"
 import {
   DurableStreamsWorkflowEngine,
 } from "../../../src/workflow-engine/DurableStreamsWorkflowEngine.ts"
@@ -15,43 +18,68 @@ import {
   waitForWorkflowExecutionId,
 } from "../../../src/workflow-engine/workflows/index.ts"
 
-const runtimeObservationStreams = RuntimeObservationStreams.of({
-  agentOutput: Stream.empty,
-  agentOutputAfter: () => Stream.empty,
-  initialAgentOutputAfter: () => Effect.succeed(Option.none()),
-  agentOutputForContext: () => Stream.empty,
-  runtimeRun: Stream.empty,
-  callerFact: stream =>
-    stream === "facts"
-      ? Stream.fromIterable([
-        { kind: "ignore", correlationId: "decoy" },
-        { kind: "match", correlationId: "target", payload: 42 },
-      ])
-      : Stream.empty,
+// wait/child-output streams deletion: this test previously injected a
+// synthetic `RuntimeObservationStreams` and let the WaitForWorkflow resolve a
+// `CallerFact` source through it. The workflow now reads its sources through
+// `RuntimeChannelRouter`, so the test fixture is a channel router with
+// purpose-built ingress routes — every wait/child-output dispatch in
+// production crosses the same surface.
+
+const RowSchema = Schema.Struct({
+  kind: Schema.optional(Schema.String),
+  correlationId: Schema.String,
+  payload: Schema.optional(Schema.Number),
 })
 
-const runtimeObservationStreamsLayer = Layer.succeed(
-  RuntimeObservationStreams,
-  runtimeObservationStreams,
-)
+const ingressRouteFromStream = (
+  target: string,
+  stream: Stream.Stream<unknown, unknown, never>,
+): RuntimeChannelRoute<unknown, unknown> =>
+  runtimeRouteFromChannel(
+    makeIngressChannel({
+      target,
+      schema: RowSchema,
+      sourceClass: "static-source",
+      stream: stream as Stream.Stream<
+        Schema.Schema.Type<typeof RowSchema>,
+        unknown,
+        never
+      >,
+    }),
+  )
+
+const matchFactsRouter = makeRuntimeChannelRouter([
+  ingressRouteFromStream(
+    "facts",
+    Stream.fromIterable([
+      { kind: "ignore", correlationId: "decoy" },
+      { kind: "match", correlationId: "target", payload: 42 },
+    ]),
+  ),
+  ingressRouteFromStream("empty", Stream.empty),
+])
+
+const matchFactsRouterLayer = Layer.succeed(RuntimeChannelRouter, matchFactsRouter)
 
 const waitForWorkflowTestLayer = WaitForWorkflowLayer.pipe(
-  Layer.provideMerge(runtimeObservationStreamsLayer),
+  Layer.provideMerge(matchFactsRouterLayer),
   Layer.provideMerge(WorkflowEngine.layerMemory),
 )
 
 describe("WaitForWorkflow", () => {
-  it("firegrid-workflow-driven-runtime.PHASE_1_CONTEXT_WORKFLOW.10 matches a runtime observation stream row through the workflow engine", async () => {
+  it("firegrid-workflow-driven-runtime.PHASE_1_CONTEXT_WORKFLOW.10 matches a channel-router ingress row through the workflow engine", async () => {
     const outcome = await Effect.runPromise(
       Effect.scoped(
         WaitForWorkflow.execute({
           executionKey: "wf-match",
-          source: { _tag: "CallerFact", stream: "facts" },
-          trigger: [{ path: ["correlationId"], equals: "target" }],
+          source: {
+            channel: "facts",
+            trigger: [{ path: ["correlationId"], equals: "target" }],
+          },
           timeoutMs: 60_000,
         }).pipe(
           Effect.provide(waitForWorkflowTestLayer),
-          Effect.provideService(RuntimeObservationStreams, runtimeObservationStreams),
+          Effect.provideService(RuntimeChannelRouter, matchFactsRouter),
         ),
       ),
     )
@@ -67,12 +95,14 @@ describe("WaitForWorkflow", () => {
       Effect.scoped(
         WaitForWorkflow.execute({
           executionKey: "wf-timeout",
-          source: { _tag: "CallerFact", stream: "empty" },
-          trigger: [{ path: ["correlationId"], equals: "missing" }],
+          source: {
+            channel: "empty",
+            trigger: [{ path: ["correlationId"], equals: "missing" }],
+          },
           timeoutMs: 10,
         }).pipe(
           Effect.provide(waitForWorkflowTestLayer),
-          Effect.provideService(RuntimeObservationStreams, runtimeObservationStreams),
+          Effect.provideService(RuntimeChannelRouter, matchFactsRouter),
         ),
       ),
     )
@@ -87,31 +117,33 @@ describe("WaitForWorkflow", () => {
   // tf-0xe4: wait_for_any races the primary source plus additionalSources inside
   // the one workflow Activity and reports the winning index.
   it("tf-0xe4 races multiple sources and returns the winning index", async () => {
-    const streams = RuntimeObservationStreams.of({
-      ...runtimeObservationStreams,
-      callerFact: stream =>
-        stream === "s1"
-          ? Stream.fromIterable([{ correlationId: "target", payload: 7 }])
-          : Stream.empty, // s0 never matches
-    })
+    const router = makeRuntimeChannelRouter([
+      ingressRouteFromStream("s0", Stream.empty), // never matches
+      ingressRouteFromStream(
+        "s1",
+        Stream.fromIterable([{ correlationId: "target", payload: 7 }]),
+      ),
+    ])
     const layer = WaitForWorkflowLayer.pipe(
-      Layer.provideMerge(Layer.succeed(RuntimeObservationStreams, streams)),
+      Layer.provideMerge(Layer.succeed(RuntimeChannelRouter, router)),
       Layer.provideMerge(WorkflowEngine.layerMemory),
     )
     const outcome = await Effect.runPromise(
       Effect.scoped(
         WaitForWorkflow.execute({
           executionKey: "wf-any-race",
-          source: { _tag: "CallerFact", stream: "s0" },
-          trigger: [{ path: ["correlationId"], equals: "target" }],
+          source: {
+            channel: "s0",
+            trigger: [{ path: ["correlationId"], equals: "target" }],
+          },
           additionalSources: [{
-            source: { _tag: "CallerFact", stream: "s1" },
+            channel: "s1",
             trigger: [{ path: ["correlationId"], equals: "target" }],
           }],
           timeoutMs: 60_000,
         }).pipe(
           Effect.provide(layer),
-          Effect.provideService(RuntimeObservationStreams, streams),
+          Effect.provideService(RuntimeChannelRouter, router),
         ),
       ),
     )
@@ -141,32 +173,28 @@ describe("WaitForWorkflow durable wait_for_any restart", () => {
     baseUrl = undefined
   })
 
-  const emptyStreams: RuntimeObservationStreamsService = {
-    agentOutput: Stream.empty,
-    agentOutputAfter: () => Stream.empty,
-    initialAgentOutputAfter: () => Effect.succeed(Option.none()),
-    agentOutputForContext: () => Stream.empty,
-    runtimeRun: Stream.empty,
-    callerFact: () => Stream.empty,
-  }
+  const emptyRouter = makeRuntimeChannelRouter([
+    ingressRouteFromStream("s0", Stream.empty),
+    ingressRouteFromStream("s1", Stream.empty),
+  ])
 
   const runGeneration = <A>(
     streamUrl: string,
-    streams: RuntimeObservationStreamsService,
-    effect: Effect.Effect<A, unknown, RuntimeObservationStreams | WorkflowEngine.WorkflowEngine>,
+    router: ReturnType<typeof makeRuntimeChannelRouter>,
+    effect: Effect.Effect<A, unknown, RuntimeChannelRouter | WorkflowEngine.WorkflowEngine>,
   ): Promise<A> =>
     Effect.runPromise(
       Effect.scoped(
         effect.pipe(
           Effect.provide(
             WaitForWorkflowLayer.pipe(
-              Layer.provideMerge(Layer.succeed(RuntimeObservationStreams, streams)),
+              Layer.provideMerge(Layer.succeed(RuntimeChannelRouter, router)),
               Layer.provideMerge(
                 DurableStreamsWorkflowEngine.layer({ streamUrl }) as Layer.Layer<never, unknown, unknown>,
               ),
             ),
           ),
-          Effect.provideService(RuntimeObservationStreams, streams),
+          Effect.provideService(RuntimeChannelRouter, router),
         ) as Effect.Effect<A, unknown, never>,
       ),
     )
@@ -176,26 +204,28 @@ describe("WaitForWorkflow durable wait_for_any restart", () => {
     const streamUrl = `${baseUrl}/v1/stream/wait-any-restart-${crypto.randomUUID()}`
     const payload = {
       executionKey: "wf-any-restart",
-      source: { _tag: "CallerFact" as const, stream: "s0" },
-      trigger: [{ path: ["correlationId"], equals: "target" }],
+      source: {
+        channel: "s0",
+        trigger: [{ path: ["correlationId"], equals: "target" }],
+      },
       additionalSources: [{
-        source: { _tag: "CallerFact" as const, stream: "s1" },
+        channel: "s1",
         trigger: [{ path: ["correlationId"], equals: "target" }],
       }],
     }
 
-    // Generation 1: source s1 matches -> the durable workflow races and
+    // Generation 1: channel s1 matches -> the durable workflow races and
     // completes with the winning index, persisting the result.
-    const matchStreams: RuntimeObservationStreamsService = {
-      ...emptyStreams,
-      callerFact: stream =>
-        stream === "s1"
-          ? Stream.fromIterable([{ correlationId: "target", payload: 99 }])
-          : Stream.empty,
-    }
+    const matchRouter = makeRuntimeChannelRouter([
+      ingressRouteFromStream("s0", Stream.empty),
+      ingressRouteFromStream(
+        "s1",
+        Stream.fromIterable([{ correlationId: "target", payload: 99 }]),
+      ),
+    ])
     const first = await runGeneration(
       streamUrl,
-      matchStreams,
+      matchRouter,
       WaitForWorkflow.execute(payload),
     )
     expect(first).toEqual({
@@ -205,13 +235,13 @@ describe("WaitForWorkflow durable wait_for_any restart", () => {
     })
 
     // Generation 2 (host restart): a freshly reconstructed engine over the same
-    // durable state, now with NO matching source. Re-executing the same
+    // durable state, now with NO matching channel. Re-executing the same
     // execution returns the journaled result from durable state — if the race
-    // were in-memory (the old Effect.raceAll) or re-run here, the empty source
+    // were in-memory (the old Effect.raceAll) or re-run here, the empty channel
     // would never match. This is the survives-restart property.
     const replayed = await runGeneration(
       streamUrl,
-      emptyStreams,
+      emptyRouter,
       WaitForWorkflow.execute(payload),
     )
     expect(replayed).toEqual({

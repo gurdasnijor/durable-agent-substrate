@@ -5,7 +5,6 @@ import {
   FiregridLocalHostLive,
   FiregridMcpServerLayer,
   RuntimeContextChannelRouterLive,
-  VerifiedWebhookFactCallerOwnedFactStreamsLive,
   durableStreamUrl,
   makeIngressChannel,
   type FiregridHost,
@@ -204,9 +203,11 @@ export const linearWebhookCookbookHost = (
     VerifiedWebhookFactChannel,
     verifiedWebhookChannel,
   )
-  const callerFacts = VerifiedWebhookFactCallerOwnedFactStreamsLive.pipe(
-    Layer.provide(verifiedWebhookChannelLive),
-  )
+  // wait/child-output streams deletion: the agent's wait_for tool now reaches
+  // the verified-webhook channel through `RuntimeContextChannelRouterLive`
+  // (registered below). The previous `VerifiedWebhookFactCallerOwnedFactStreamsLive`
+  // adapter bridged the channel into the deleted `RuntimeObservationStreams`
+  // aggregator and is no longer needed.
   const route = LinearWebhookCookbookRouteLive({
     host: "127.0.0.1",
     port: 0,
@@ -215,7 +216,6 @@ export const linearWebhookCookbookHost = (
   const appFacts = Layer.mergeAll(
     factTable,
     verifiedWebhookChannelLive,
-    callerFacts,
     route,
   )
   const channelsLive = RuntimeContextChannelRouterLive([

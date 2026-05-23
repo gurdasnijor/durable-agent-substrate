@@ -26,11 +26,10 @@ import { DurableStreamTestServer } from "@durable-streams/server"
 import { Prompt } from "@effect/ai"
 import { Workflow } from "@effect/workflow"
 import { DurableTable } from "effect-durable-operators"
-import { Effect, Fiber, Layer, Option, Schema, Stream } from "effect"
+import { Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import type { AgentOutputEvent, ToolResultEvent } from "@firegrid/runtime/events"
 import { AgentToolCallPartSchema, ToolResultEventSchema } from "@firegrid/runtime/events"
-import { RuntimeObservationStreams } from "@firegrid/runtime/streams"
 import { WaitForWorkflowLayer } from "@firegrid/runtime/workflows"
 import {
   RuntimeChannelRouter,
@@ -202,33 +201,6 @@ const TestRuntimeChannelRouterLive = (
     )
   }))
 
-const TestRuntimeObservationStreamsLive = Layer.effect(
-  RuntimeObservationStreams,
-  Effect.gen(function*() {
-    const table = yield* TestSourceTable
-    return {
-      agentOutput: Stream.empty,
-      agentOutputAfter: () => Stream.empty,
-      initialAgentOutputAfter: () => Effect.succeed(Option.none()),
-      agentOutputForContext: () => Stream.empty,
-      runtimeRun: Stream.empty,
-      // tf-0xe4: wait_for_any now races CallerFact{stream: <channel target>}
-      // sources inside the durable WaitForWorkflow (was an in-memory raceAll
-      // over the channels' own streams). Resolve the wait_for_any race targets
-      // here so the durable race finds the winner: event.plan.ready matches,
-      // state.rows never does.
-      callerFact: (stream: string) =>
-        stream === TEST_EVENTS_CHANNEL
-          ? table.rows.rows()
-          : stream === "event.plan.ready"
-          ? Stream.make({ id: "row-fast", status: "ready" })
-          : stream === "state.rows"
-          ? Stream.never
-          : Stream.empty,
-    }
-  }),
-)
-
 // ---------------------------------------------------------------------------
 // Layer builder
 // ---------------------------------------------------------------------------
@@ -247,7 +219,6 @@ const buildLayer = (
   return RunToolWorkflowLayer.pipe(
     Layer.provideMerge(RuntimeAgentToolExecutionLive),
     Layer.provideMerge(WaitForWorkflowLayer),
-    Layer.provideMerge(TestRuntimeObservationStreamsLive),
     Layer.provideMerge(hostLayer),
     Layer.provideMerge(TestRuntimeChannelRouterLive(channels)),
     Layer.provideMerge(DurableStreamsWorkflowEngine.layer({

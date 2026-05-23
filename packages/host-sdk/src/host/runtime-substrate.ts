@@ -16,9 +16,6 @@ import {
   type RuntimeContextStateStore,
 } from "@firegrid/runtime/kernel"
 import {
-  RuntimeObservationStreamsLive,
-} from "@firegrid/runtime/streams"
-import {
   PerContextRuntimeAgentOutputAfterEventsLive,
   RuntimeContextStateStoreLive,
 } from "./per-context-runtime-output.ts"
@@ -48,21 +45,17 @@ export type HostRuntimeContextExecutionEnv =
 // firegrid-typed-wait-source-redesign.WAIT_ROUTER.1
 // firegrid-typed-wait-source-redesign.REJECTION.2
 // Shared host runtime observation substrate used by workflow support layers.
-// Runtime-owned workflows consume typed observation tags directly; host-sdk
-// installs the host-backed providers at the composition boundary.
+// wait/child-output streams deletion: this layer no longer composes the
+// deleted `RuntimeObservationStreamsLive` aggregator. WaitForWorkflow's
+// Activity now reads each source through `RuntimeChannelRouter`, so the
+// host-side ingress channels are surfaced as routes (see
+// `host-control-routes.ts`) rather than re-aggregated under a separate Tag.
 export const HostRuntimeObservationSubstrateLive = PerContextRuntimeAgentOutputAfterEventsLive.pipe(
   Layer.provideMerge(RuntimeContextStateStoreLive),
   Layer.provideMerge(SessionAgentOutputChannelLive),
   Layer.provideMerge(RuntimeAgentOutputEventsLayer),
   Layer.provideMerge(RuntimeControlPlaneRecorderLive),
   Layer.withSpan("firegrid.host.runtime_substrate.observation.layer", {
-    kind: "internal",
-  }),
-)
-
-export const HostRuntimeObservationStreamsLive = RuntimeObservationStreamsLive.pipe(
-  Layer.provideMerge(HostRuntimeObservationSubstrateLive),
-  Layer.withSpan("firegrid.host.runtime_substrate.observation_streams.layer", {
     kind: "internal",
   }),
 )
@@ -74,5 +67,10 @@ export const HostRuntimeObservationStreamsLive = RuntimeObservationStreamsLive.p
 // substrate. Host-level seams (commands / agent-tool-host) capture only
 // the public host runtime context; wait-store services are not ambient on
 // `FiregridRuntimeHostWithWorkflowLive`.
-export type RuntimeContextWorkflowExecutionEnv =
-  HostRuntimeContextExecutionEnv
+//
+// wait/child-output streams deletion: the previous
+// `RuntimeContextWorkflowExecutionEnv` alias was a local re-export of
+// `HostRuntimeContextExecutionEnv`. It became dead-code after removing
+// `HostRuntimeObservationStreamsLive` (which no caller imports the alias
+// any more). Use `HostRuntimeContextExecutionEnv` directly in any new
+// composition seam.

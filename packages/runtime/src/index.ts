@@ -66,18 +66,16 @@ export {
   type RuntimeContextSessionStartedEvidence,
   type RuntimeContextWorkflowSessionService,
 } from "./subscribers/runtime-context-session/index.ts"
+// wait/child-output streams deletion: `RuntimeObservationStreams` /
+// `RuntimeObservationStreamsLive` / `RuntimeObservationSource(Schema)` and
+// the four per-variant source schemas are gone. The agent `wait_for` tool and
+// the WaitForWorkflow Activity reach sources through `RuntimeChannelRouter`
+// directly (proven by `child-output-existing-channel-router` and
+// `shape-c-channel-router-turn`). `CallerOwnedFactStreams` is the remaining
+// export — a PARK blocker for tiny-firegrid simulations that still wire it.
 export {
-  AgentOutputAfterObservationSourceSchema,
-  AgentOutputObservationSourceSchema,
-  CallerFactObservationSourceSchema,
   CallerOwnedFactStreams,
   type CallerOwnedFactStreamsService,
-  RuntimeObservationSourceSchema,
-  type RuntimeObservationSource,
-  RuntimeObservationStreams,
-  RuntimeObservationStreamsLive,
-  type RuntimeObservationStreamsService,
-  RuntimeRunObservationSourceSchema,
 } from "./streams/index.ts"
 // firegrid-workflow-driven-runtime.PHASE_2_SYNC_RUN.5
 // firegrid-workflow-driven-runtime.PHASE_2_SYNC_RUN.6

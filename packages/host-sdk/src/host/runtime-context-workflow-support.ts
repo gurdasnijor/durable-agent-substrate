@@ -10,7 +10,6 @@ import {
 } from "@firegrid/runtime/kernel"
 import {
   HostRuntimeObservationSubstrateLive,
-  HostRuntimeObservationStreamsLive,
   type HostRuntimeContextExecutionEnv,
 } from "./runtime-substrate.ts"
 import {
@@ -30,9 +29,15 @@ export type { HostRuntimeContextExecutionEnv }
 // `RuntimeToolUseExecutor` for the `RunToolUse` transition branch; the
 // host-level wiring routes the same pipe `Effect.context<…>()` capture
 // (TFIND-031 Option Y) that the per-context support layer uses.
+//
+// wait/child-output streams deletion: `HostRuntimeObservationStreamsLive`
+// is no longer composed here. The WaitForWorkflow Activity reads sources
+// through `RuntimeChannelRouter`; the substrate layer still provides the
+// per-context output substrate (`RuntimeAgentOutputAfterEvents`,
+// `RuntimeContextStateStore`, `SessionAgentOutputChannel`, etc.) used by
+// other consumers in the engine chain.
 export const runtimeToolUseExecutorLayer = RuntimeToolUseExecutorLive.pipe(
   Layer.provide(HostRuntimeObservationSubstrateLive),
-  Layer.provideMerge(HostRuntimeObservationStreamsLive),
   Layer.provideMerge(RuntimeAgentToolExecutionLive),
 )
 
@@ -46,12 +51,6 @@ export const runtimeToolUseExecutorLayer = RuntimeToolUseExecutorLive.pipe(
 // sibling `Layer.merge` silently breaks that wiring (the tool activity
 // can no longer resolve the executor at workflow-execution time → e.g.
 // `schedule_me` produces nothing).
-//
-// The executor's own observation-substrate RIn is discharged by providing
-// `HostRuntimeObservationSubstrateLive` into `RuntimeToolUseExecutorLive`
-// too. This is the SAME layer reference provided into the workflow body,
-// so Effect Layer memoization builds it exactly once; recorder and waker
-// cannot diverge. The public host contract is unchanged.
 export const runtimeContextWorkflowSupportLayer = (
   contextId: string,
   agentToolHost: AgentToolHostService,
@@ -66,7 +65,6 @@ export const runtimeContextWorkflowSupportLayer = (
   // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- DurableTable.layer still leaks any through substrate layers; the declared Layer R channel is the intended capability boundary.
   RuntimeContextWorkflowNativeLayer.pipe(
     Layer.provideMerge(HostRuntimeObservationSubstrateLive),
-    Layer.provideMerge(HostRuntimeObservationStreamsLive),
     Layer.provideMerge(runtimeToolUseExecutorLayer),
     Layer.provideMerge(Layer.succeed(AgentToolHost, agentToolHost)),
     Layer.withSpan("firegrid.host.runtime_context.workflow_support.layer", {
@@ -86,7 +84,6 @@ export const toolCallWorkflowSupportLayer = (
   // the DurableClock delay fires.
   Layer.merge(RuntimeToolCallWorkflowLayer, ScheduledPromptWorkflowLayer).pipe(
     Layer.provideMerge(HostRuntimeObservationSubstrateLive),
-    Layer.provideMerge(HostRuntimeObservationStreamsLive),
     Layer.provideMerge(runtimeToolUseExecutorLayer),
     Layer.provideMerge(Layer.succeed(AgentToolHost, agentToolHost)),
   )

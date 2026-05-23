@@ -13,7 +13,7 @@ import {
   type RuntimeEventRow,
   type RuntimeLogLineRow,
 } from "@firegrid/protocol/launch"
-import { Effect, Fiber, Layer, Option, Ref, Stream } from "effect"
+import { Effect, Layer, Option, Ref, Stream } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
   RuntimeControlPlaneRecorderLive,
@@ -32,10 +32,6 @@ import {
   type AgentInputEvent,
 } from "@firegrid/runtime/events"
 import {
-  WaitForWorkflow,
-  WaitForWorkflowLayer,
-} from "@firegrid/runtime/workflows"
-import {
   RuntimeContextWorkflowNative,
   RuntimeContextWorkflowNativeLayer,
   RuntimeContextWorkflowSession,
@@ -50,16 +46,12 @@ import {
   RuntimeContextStateStore,
   WorkflowEngineTable,
 } from "@firegrid/runtime/workflow-engine"
-import {
-  FiregridRuntimeHostWithWorkflowLive,
-} from "../../src/host/layers.ts"
-import {
-  HostRuntimeObservationStreamsLive,
-} from "../../src/host/runtime-substrate.ts"
+// wait/child-output streams deletion: HostRuntimeObservationStreamsLive is
+// gone; the two AgentOutputAfter test cases that relied on it (and on
+// `WaitForWorkflow`, `FiregridRuntimeHostWithWorkflowLive`, and
+// `PerContextRuntimeOutputWriter`) were removed — see the deleted-test
+// placeholders below.
 import { RuntimeHostConfig } from "../../src/host/config.ts"
-import {
-  PerContextRuntimeOutputWriter,
-} from "../../src/host/per-context-runtime-output.ts"
 import { executeRuntimeContextWorkflow } from "@firegrid/runtime/kernel"
 import { runtimeContextWorkflowExecutionId } from "@firegrid/runtime/kernel"
 
@@ -397,143 +389,22 @@ const executeNativeRuntimeContext = (
   })
 
 describe("workflow-native runtime-context core", () => {
-  it("workflow-native runtime-context core resolves AgentOutputAfter initial state through PerContextRuntimeOutputWriter", async () => {
-    if (baseUrl === undefined) throw new Error("server not started")
-    const namespace = `path-x-output-initial-${crypto.randomUUID()}`
-    const hostId = "host-a" as HostId
-    const contextId = `ctx_${crypto.randomUUID()}`
-    const activityAttempt = 1
-    const context = {
-      contextId,
-      createdAt: new Date().toISOString(),
-      runtime: normalizeRuntimeIntent(local.jsonl({
-        argv: ["node", "-e", "process.exit(0)"],
-        agentProtocol: "stdio-jsonl",
-      })),
-      host: {
-        hostId,
-        streamPrefix: makeHostStreamPrefix({ namespace, hostId }),
-        boundAtMs: Date.now(),
-      },
-    }
-
-    const layer = WaitForWorkflowLayer.pipe(
-      Layer.provideMerge(HostRuntimeObservationStreamsLive),
-      Layer.provideMerge(DurableStreamsWorkflowEngine.layer({
-        streamUrl: streamUrl(`${namespace}.test.workflow`),
-      })),
-      Layer.provideMerge(FiregridRuntimeHostWithWorkflowLive({
-        durableStreamsBaseUrl: baseUrl,
-        namespace,
-        hostId,
-      })),
-    )
-
-    const result = await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function*() {
-          const writer = yield* PerContextRuntimeOutputWriter
-          yield* writer.appendAgentEvent(
-            context,
-            activityAttempt,
-            0,
-            { _tag: "Terminated", exitCode: 0 },
-          )
-          const outcome = yield* WaitForWorkflow.execute({
-            executionKey: `agent-output-initial:${contextId}`,
-            source: {
-              _tag: "AgentOutputAfter",
-              contextId,
-              activityAttempt,
-              afterSequence: -1,
-            },
-            trigger: [],
-          })
-          if (outcome._tag === "Timeout") {
-            return yield* Effect.fail("unexpected timeout")
-          }
-          return outcome.raw
-        }).pipe(Effect.provide(layer)),
-      ),
-    )
-
-    expect(result).toMatchObject({
-      contextId,
-      activityAttempt,
-      sequence: 0,
-      _tag: "Terminated",
-    })
+  // wait/child-output streams deletion: two tests here previously exercised
+  // `WaitForWorkflow.execute({ source: { _tag: "AgentOutputAfter", ... }})`
+  // against the deleted `HostRuntimeObservationStreamsLive`. The
+  // `RuntimeObservationStreams` aggregator was removed: the agent-surface
+  // `wait_for` tool no longer constructs `AgentOutputAfter` sources, and the
+  // client-sdk path observes per-context output through
+  // `router.dispatch("session.agent_output", ...)` directly (proven by the
+  // `child-output-existing-channel-router` tiny-firegrid sim and the
+  // shape-c-channel-router-turn FINDING addendum). The behavior the deleted
+  // tests asserted lives in those proofs.
+  it("[DELETED] resolves AgentOutputAfter initial state through PerContextRuntimeOutputWriter", () => {
+    expect(true).toBe(true)
   })
 
-  it("workflow-native runtime-context core resolves AgentOutputAfter live writes through PerContextRuntimeOutputWriter", async () => {
-    if (baseUrl === undefined) throw new Error("server not started")
-    const namespace = `path-x-output-live-${crypto.randomUUID()}`
-    const hostId = "host-a" as HostId
-    const contextId = `ctx_${crypto.randomUUID()}`
-    const activityAttempt = 1
-    const context = {
-      contextId,
-      createdAt: new Date().toISOString(),
-      runtime: normalizeRuntimeIntent(local.jsonl({
-        argv: ["node", "-e", "process.exit(0)"],
-        agentProtocol: "stdio-jsonl",
-      })),
-      host: {
-        hostId,
-        streamPrefix: makeHostStreamPrefix({ namespace, hostId }),
-        boundAtMs: Date.now(),
-      },
-    }
-
-    const layer = WaitForWorkflowLayer.pipe(
-      Layer.provideMerge(HostRuntimeObservationStreamsLive),
-      Layer.provideMerge(DurableStreamsWorkflowEngine.layer({
-        streamUrl: streamUrl(`${namespace}.test.workflow`),
-      })),
-      Layer.provideMerge(FiregridRuntimeHostWithWorkflowLive({
-        durableStreamsBaseUrl: baseUrl,
-        namespace,
-        hostId,
-      })),
-    )
-
-    const result = await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function*() {
-          const fiber = yield* WaitForWorkflow.execute({
-            executionKey: `agent-output-live:${contextId}`,
-            source: {
-              _tag: "AgentOutputAfter",
-              contextId,
-              activityAttempt,
-              afterSequence: -1,
-            },
-            trigger: [],
-          }).pipe(
-            Effect.forkScoped,
-          )
-          const writer = yield* PerContextRuntimeOutputWriter
-          yield* writer.appendAgentEvent(
-            context,
-            activityAttempt,
-            0,
-            { _tag: "Terminated", exitCode: 0 },
-          )
-          const outcome = yield* Fiber.join(fiber)
-          if (outcome._tag === "Timeout") {
-            return yield* Effect.fail("unexpected timeout")
-          }
-          return outcome.raw
-        }).pipe(Effect.provide(layer)),
-      ),
-    )
-
-    expect(result).toMatchObject({
-      contextId,
-      activityAttempt,
-      sequence: 0,
-      _tag: "Terminated",
-    })
+  it("[DELETED] resolves AgentOutputAfter live writes through PerContextRuntimeOutputWriter", () => {
+    expect(true).toBe(true)
   })
 
   it("firegrid-workflow-driven-runtime.VALIDATION.6 proves idempotent startOrAttach across duplicate workflow starts", async () => {

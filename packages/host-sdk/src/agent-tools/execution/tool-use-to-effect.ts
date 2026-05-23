@@ -87,7 +87,6 @@ import {
   type FieldEqualsTrigger,
   type RuntimeAgentToolExecutionError,
 } from "@firegrid/runtime/tool-executor"
-import type { RuntimeObservationSource } from "@firegrid/runtime/streams"
 import type {
   RuntimeChannelRoute,
 } from "@firegrid/runtime/channels"
@@ -341,15 +340,15 @@ const runWaitForTool = (
       })
     }
     const execution = yield* RuntimeAgentToolExecution
-    const source: RuntimeObservationSource = {
-      _tag: "CallerFact",
-      stream: String(registration.target),
-    }
+    // wait/child-output streams deletion: the agent's wait_for tool now passes
+    // the channel target string straight to the executor; WaitForWorkflow
+    // resolves it through `RuntimeChannelRouter` (was: RuntimeObservationStreams
+    // `CallerFact` source).
     return yield* execution.waitFor({
       contextId: ctx.contextId,
       toolUseId,
       input,
-      source,
+      channel: String(registration.target),
       trigger: adapted.trigger,
     }).pipe(
       Effect.mapError(error =>
@@ -430,16 +429,18 @@ const runRegisteredCallChannel = (
   })
 
 // tf-0xe4: resolve each wait_for_any descriptor to a SERIALIZABLE
-// (channel, source, trigger) — a `CallerFact` source over the channel target,
-// exactly as single wait_for does — so the runtime can race them inside the
-// durable WaitForWorkflow Activity instead of an in-memory host-side wait.
+// (channel, trigger) pair — exactly as single wait_for does — so the
+// runtime can race them inside the durable WaitForWorkflow Activity instead
+// of an in-memory host-side wait. wait/child-output streams deletion: the
+// previous `RuntimeObservationSource = { _tag: "CallerFact", stream }`
+// indirection was redundant — the channel target IS the source identity, and
+// the WaitForWorkflow Activity now resolves it through `RuntimeChannelRouter`.
 const waitForAnyDescriptorToEffect = (
   toolUseId: string,
   descriptor: WaitForAnyDescriptor,
 ): Effect.Effect<
   {
     readonly channel: string
-    readonly source: RuntimeObservationSource
     readonly trigger: FieldEqualsTrigger
   },
   ToolError,
@@ -478,11 +479,7 @@ const waitForAnyDescriptorToEffect = (
       })
     }
     return {
-      channel: descriptor.channel,
-      source: {
-        _tag: "CallerFact",
-        stream: String(registration.target),
-      },
+      channel: String(registration.target),
       trigger: adapted.trigger,
     }
   })

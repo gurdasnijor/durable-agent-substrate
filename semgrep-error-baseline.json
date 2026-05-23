@@ -138,7 +138,7 @@
     {
       "ruleId": "firegrid-no-unclassified-workflow-make",
       "path": "packages/runtime/src/workflow-engine/workflows/wait-for.ts",
-      "line": 63
+      "line": 68
     },
     {
       "ruleId": "firegrid-no-unclassified-workflow-make",
@@ -157,16 +157,6 @@
     },
     {
       "ruleId": "firegrid-no-unclassified-workflow-make",
-      "path": "packages/tiny-firegrid/src/simulations/inv1-stream-zip-body/host.ts",
-      "line": 596
-    },
-    {
-      "ruleId": "firegrid-no-unclassified-workflow-make",
-      "path": "packages/tiny-firegrid/src/simulations/inv2-waitforworkflow/wait-for-workflow.ts",
-      "line": 63
-    },
-    {
-      "ruleId": "firegrid-no-unclassified-workflow-make",
       "path": "packages/tiny-firegrid/src/simulations/kernel-owned-write-arm/workflow.ts",
       "line": 83
     },
@@ -174,11 +164,6 @@
       "ruleId": "firegrid-no-unclassified-workflow-make",
       "path": "packages/tiny-firegrid/src/simulations/kernel-owned-write-arm/workflow.ts",
       "line": 129
-    },
-    {
-      "ruleId": "firegrid-no-unclassified-workflow-make",
-      "path": "packages/tiny-firegrid/src/simulations/phase0-wave-2b-stream-zip-restart-replay/host.ts",
-      "line": 575
     },
     {
       "ruleId": "firegrid-no-unclassified-workflow-make",
