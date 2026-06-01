@@ -84,8 +84,8 @@ The RFC's revised §5.5 elevates the agent choreography surface (`sleep`/`wait_f
 
 - *Safe to ship to main?* The unwired host-dispatch half is a **blocking-bead item** (with §3a/§3b); the downstream-reach half is a flagged residual risk, not a #765 blocker.
 
-### 3d. Shape-C rearch-line reconciliation (process debt)
-#765→main deletes Shape C wholesale, abandoning the 156-commit `rearch/shape-c-cutover` line + ~9 open PRs (#757/759/761/762/764). Per the transactional-cutover canon these closures must be dispositioned (remainder filed as blocking beads), not closed-as-superseded. Not investigated in depth this session; flagged.
+### 3d. Shape-C rearch-line — NO open-PR backlog (CORRECTED 2026-06-01)
+**Correction:** the only open PR is **#765** itself. The PRs once named for closure (#757/759/761/762/764) are **already CLOSED**. There is **no ~9-PR backlog** to disposition — the earlier "abandoning ~9 open PRs" claim was stale (propagated from the green-up handoff, never verified). Residue is at most retiring a stale `rearch/shape-c-cutover` **branch** (trivial branch hygiene, not a decision). The only *substantive* rearch residue — capabilities (parent/child, read-side) proven on now-deleted code — is **already captured** as the §3a/§3b beads, NOT a separate process-debt bead. **This is no longer a D1 input.**
 
 ---
 
@@ -102,15 +102,15 @@ Reasoning:
 - read-side channels that return empty (§3a) — a correctness lie,
 - a dropped, now-unwired parent→child output capability that was merged to main (§3b),
 - the broader choreography-tool dispatch surface unwired on the unified host (§3e),
-- type-unsafe stub bindings (§3c),
-- an unreconciled Shape-C line (§3d, process debt).
+- type-unsafe stub bindings (§3c).
+  (§3d Shape-C "reconciliation" is **moot** — no open-PR backlog; corrected.)
 
-The transactional-cutover rule forbids landing those as silent green. The honest disposition is: **path-A green-up the gates, and before any main cutover, file THREE completeness blocking beads — (i) read-side wiring (§3a), (ii) parent→child `agent_output` route + linkage (§3b), (iii) the choreography-tool dispatch surface — `spawn`/`spawn_all` + child/channel `wait_for` (§3e)** — plus a fourth **process-debt** bead for Shape-C line reconciliation (§3d), each with an owner and a deletion/closure path. (Separately, flag — not block — the downstream MCP-surfacing reach for codex per §3e axis 2; do not freeze the registry `newSessionMeta` contract until proven.) Only then does a real cutover become a transactional cutover rather than a half-ship behind a green CI badge.
+The transactional-cutover rule forbids landing those as silent green. The honest disposition is: **path-A green-up the gates, and before any main cutover, file THREE completeness blocking beads — (i) read-side wiring (§3a), (ii) parent→child `agent_output` route + linkage (§3b), (iii) the choreography-tool dispatch surface — `spawn`/`spawn_all` + child/channel `wait_for` (§3e)** — each with an owner and a deletion/closure path. (§3d Shape-C reconciliation is **moot** — no open-PR backlog; see correction. No fourth bead.) (Separately, flag — not block — the downstream MCP-surfacing reach for codex per §3e axis 2; do not freeze the registry `newSessionMeta` contract until proven.) Only then does a real cutover become a transactional cutover rather than a half-ship behind a green CI badge.
 
 ### Suggested next moves (cheap, in order)
 1. **Decide D1** (Gurdas): A + validation-posture, as above — or correct the frame.
 2. If A: land the **2 hard `missingReturnYieldStar` errors** first (trivial, isolated, reversible) as the bounded quick win; then the messages; then warnings; then dup/dead (after deciding whether to wire read-side first so the stub dup/dead resolves naturally).
-3. File the three completeness blocking beads (§3a read-side / §3b parent→child agent_output / §3e choreography-tool dispatch surface) + a Shape-C process-debt bead (§3d) before treating #765 as cutover-ready.
+3. File the three completeness blocking beads (§3a read-side / §3b parent→child agent_output / §3e choreography-tool dispatch surface) before treating #765 as cutover-ready. (§3d Shape-C reconciliation: moot — no open-PR backlog; no bead.)
 4. Parent→child (§3b) and the choreography-tool dispatch surface (§3e) are **not** green-up items — they're Tier-2/§4 work; do not attempt a blind re-home.
 
 ---

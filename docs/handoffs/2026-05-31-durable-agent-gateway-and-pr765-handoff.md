@@ -14,6 +14,39 @@ There are **two intertwined tracks**:
 
 This handoff orders **everything** by load-bearing-ness (most → least) and separates **decisions** (Gurdas's to make) from **work** (an agent can do). Track 1 must land/disposition before track 2 builds on it — but several track-2 items *are* track-1 green-up work (read-side, parent/child), so they're not fully separable.
 
+---
+
+## ⚑ Active coordination state — START HERE if you're picking up coordination across both lanes
+
+As of 2026-05-31 there are **two live parallel agent lanes** plus a coordinator. The coordinator session is **departing**; the next agent inherits coordination duty. The lanes were dispatched from the prompts in this session and have produced cross-cutting findings that must be driven to closure.
+
+### The lanes (cmux surface map — refs renumber across restarts; match by TITLE, re-run `cmux list-pane-surfaces`)
+
+| Lane | cmux surface | Worktree / branch | Owns | Current state |
+|---|---|---|---|---|
+| **A — #765 + RFC** | `surface:24` "Review runtime architecture handoff document" | `firegrid-worktrees/pr765-review` / `sidecar/pr765-core-greenup` | #765 green-up, the **D1 memo**, and **single-writer on the RFC + this handoff** while active | Work **committed** `414052c08`; D1 memo on-branch `34aeefabb`; rec = **A + validation-posture**. Running the per-tool wiring trace + §5.5 three-column split. **MATERIAL:** parent→child `agent_output` (and spawn/spawn_all + child `wait_for`) are **UNWIRED on the unified host, not just uncovered.** |
+| **B — adapter spike** | `surface:25` "Validate foreign ACP adapters on Firegrid substrate" | its **own** worktree `firegrid-worktrees/pr765-adapter-spike` / `sidecar/pr765-adapter-divergence-spike` | the divergence spike + `docs/spikes/2026-05-31-adapter-divergence-spike.md` + its own memory | Spike ran; verdict = **config-not-code (small rock)** for dialect divergence (concentrated in one registry field `newSessionMeta`). Found the §5.5 cross-cut (below). |
+| **Coordinator** | `surface:6` "Review session context" | — (this session) | dispatch + routing + RFC ownership during alignment | **Departing.** Hands off to you. |
+
+### Coordination rules (established this session — keep them)
+- **Single-writer on the RFC + handoff = Lane A** while active. Lane B (and you) **never edit the RFC** — route findings to Lane A to fold in. (This coordination section is the one exception, authored by the coordinator; it is Lane-A-owned going forward.)
+- **Lane B stays in its own worktree + spike doc + memory.** No shared-file collision by construction.
+- **Cross-lane findings persist to `project_durable_agent_gateway_rfc.md`** (the shared index memory) so they survive even if a lane stops.
+- **Routing channel:** `cmux send --surface <ref> "<msg>"` then `cmux send-key --surface <ref> Enter`, then `cmux trigger-flash --surface <ref>`.
+
+### The live convergence you must drive to closure
+The two lanes independently hit the **same object — the choreography-reach surface — from opposite ends.** Choreography-reach has **TWO axes, both must hold**:
+1. **host-dispatch-wired on unified** (Lane A: spawn/spawn_all + child `wait_for` are unwired → a #765 blocking-bead);
+2. **downstream-adapter MCP-surfacing reach** (Lane B: the choreography catalog reaches a downstream acpx adapter's LLM only via MCP on `session/new`, and that is **per-dialect** — claude needs the `_meta` `disableBuiltInTools`+`alwaysLoad` coax; codex defers MCP differently, **UN-RUN**).
+
+The §6 "config not code / small-rock" fleet verdict **holds but rests on this one un-run path** — it's a *measurement gap, not an architecture gap* (the divergence lives in a single registry field).
+
+### Open coordination action items (inherited)
+1. **HOLD THE GATE:** the **MCP-surfacing follow-up spike** (attach Firegrid's MCP catalog; drive a `wait_for`/`schedule_me` choreography turn through **each** adapter; assert the tool is callable) is **APPROVED and must run BEFORE the §4 registry `newSessionMeta`/MCP-surfacing contract is frozen.** This is Lane B's next task. Don't let the registry design lock without it.
+2. **Lane A pending RFC incorporation** (route/confirm): §5.5 "reach has two axes" note + §6 residual-risk line + §10 falsifier ("choreography surface reaches each dialect LLM" — still open for codex). And the **D1 blocking-bead set is now THREE**: read-side stubs, parent→child `agent_output` (unwired), and the **choreography-tool dispatch surface** (spawn/spawn_all + child/channel `wait_for`).
+3. **Surface D1 to Gurdas** — the expanded blocking-bead set + the "schema-complete but partially-wired-on-unified" pattern is the key new input to the cutover-vs-validation posture (Lane A rec = A + validation-posture).
+4. **Maintain single-writer discipline** and keep persisting cross-lane findings to the index memory.
+
 ## Artifacts produced this session
 
 - **RFC:** `docs/rfcs/2026-05-31-firegrid-durable-acp-acpx-alignment.md` — Firegrid as a durable agent gateway; "Restate for agents" positioning; dual-role ACP gateway; separation-of-concerns; acpx adapter fleet + conformance; non-ACP feasibility (§6.5); 12 open questions.
@@ -45,7 +78,7 @@ D1 unblocks the substrate. (D2 is **resolved** — own the durable-streams core;
 1. **Green-up the 3 red gates** (effect-diagnostics, lint:dup, lint:dead) with **path-A discipline**. *Why #1:* nothing ships until #765 is green; the vision builds on this substrate. Detail + per-gate locations in the prior green-up handoff.
 2. **Wire the stubbed read side** — `HostContextSnapshot`/`HostSessionSnapshot`/`HostContexts`/`SessionLifecycle` channels → real `DurableTable` reads (currently return empty, `channel-bindings.ts:448-490`). *Why high:* it's both #765 hygiene **and** vision-critical — `sessions show/history/list` (acpx/Zed parity) reads exactly these. On #765's critical path.
 3. **Re-home #746/#748 regressions + verify parent/child on the unified path.** #765 deleted `wait-for-session-agent-output.test.ts` (#746) and `agent-tool-host-live.test.ts` (#748); confirm the unified path still routes `wait_for session.agent_output` for a child and admits `session_new` child-start with parent ACP runtime. Design already improved (tf-22fo `child-output-existing-channel-router`: reuse `session.agent_output` + cursor, no new channel). *Why high:* these pin merged-to-main behavior that the cutover dropped coverage for.
-4. **Rearch-line reconciliation.** #765 → main deletes Shape C wholesale, abandoning the 156-commit `rearch/shape-c-cutover` line + ~9 open PRs (#757/759/761/762/764 named for closure). Disposition the closures + branches (per the transactional-cutover canon, file the remainder as blocking beads, don't close-as-superseded). *Why here:* unresolved process debt that compounds if ignored.
+4. **Rearch-line — MOOT (verified 2026-06-01).** Only **#765** is open; the PRs once named for closure (#757/759/761/762/764) are **already CLOSED**. There is no ~9-PR backlog (the earlier claim was stale, never verified). Residue = at most retiring a stale `rearch/shape-c-cutover` branch (trivial branch hygiene). The substantive residue (capabilities proven on now-deleted code) is **already** the read-side (#2) + parent/child (#3) beads — NOT a separate workstream. Dropped from the plan.
 
 ### Tier 2 — Keystone + clean seams
 5. **`session/cancel` keystone** (RFC §7). *Why load-bearing:* one durable cancelled-terminal-state unit pays off **4 ways** — conformance MUST, the one unimplemented method on the live Zed agent face (`stdio-edge.ts:386` rejects), the client-codec gap for cancelling downstream adapters, and Restate's graceful-cancel control surface. Do early.
