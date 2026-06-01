@@ -76,6 +76,14 @@ Tracing the unified production path (`FiregridHost`, `host.ts`) for whether pare
 11 total in `runtime/src`; **5 added by this branch** (4 in `channel-bindings.ts:142/161/216/259`, 1 elsewhere). They sit on the **stub** input-channel bindings (`HostPromptChannelLive` etc.), which use a placeholder schema (`HostContextsCreateRequestSchema as never`) and cast the whole binding `as unknown as <Channel>["Type"]`. These stubs exist only to satisfy the Tag at build time and are *overridden at runtime* by the signaling Lives (for the 4 input channels) — so individual risk is low, but they mask genuine schema mismatches and are scaffolding, not finished bindings.
 - *Work to finish:* give stubs correct schemas or remove them once the real bindings exist. Coupled to §3a read-side wiring. ~½ day after that lands.
 
+### 3e. Choreography-tool dispatch surface is unwired on the unified host (architect convergence)
+The RFC's revised §5.5 elevates the agent choreography surface (`sleep`/`wait_for`/`wait_for_any`/`send`/`spawn`/`spawn_all`/`schedule_me`/`execute`) to a load-bearing constraint — the LLM owns sequencing by *calling* these durable tools. The full surface exists in schema (`agent-tools/schema.ts`) and substrate, but **choreography *reach* has two axes, both of which must hold:**
+
+1. **Host-dispatch wired on the unified path.** What actually dispatches through `FiregridHost` today: `schedule_me`, webhook/peer `wait_for`, tool `execute`, permission. **Unwired:** `spawn` / `spawn_all` (child agent) and the child/channel `wait_for session.agent_output` route (the `unified.session.spawn` activity in `subscribers/runtime-context.ts` is the *internal* session `startOrAttach`, not the agent tool; no parent→child linkage). **Unverified:** `sleep`, generic `wait_for(channel)`, `send(channel)` egress. This is the same gap as §3b, generalized.
+2. **Downstream-adapter MCP-surfacing reach.** Even host-dispatched, the catalog reaches a downstream acpx adapter's LLM only via per-dialect MCP-surfacing on `session/new` — proven for claude (`_meta` coax), **UN-RUN for codex** (spike used `mcpServers:[]`). Not a #765 gate, but a registry-contract caution: **do not freeze `newSessionMeta` until a follow-up spike drives a `wait_for`/`schedule_me` turn through each adapter.**
+
+- *Safe to ship to main?* The unwired host-dispatch half is a **blocking-bead item** (with §3a/§3b); the downstream-reach half is a flagged residual risk, not a #765 blocker.
+
 ### 3d. Shape-C rearch-line reconciliation (process debt)
 #765→main deletes Shape C wholesale, abandoning the 156-commit `rearch/shape-c-cutover` line + ~9 open PRs (#757/759/761/762/764). Per the transactional-cutover canon these closures must be dispositioned (remainder filed as blocking beads), not closed-as-superseded. Not investigated in depth this session; flagged.
 
@@ -93,16 +101,17 @@ Reasoning:
 **But green ≠ ready-to-cut-over.** The cutover-vs-validation posture must be **validation artifact**, because shipping to main today would carry:
 - read-side channels that return empty (§3a) — a correctness lie,
 - a dropped, now-unwired parent→child output capability that was merged to main (§3b),
+- the broader choreography-tool dispatch surface unwired on the unified host (§3e),
 - type-unsafe stub bindings (§3c),
-- an unreconciled Shape-C line (§3d).
+- an unreconciled Shape-C line (§3d, process debt).
 
-The transactional-cutover rule forbids landing those as silent green. The honest disposition is: **path-A green-up the gates, and before any main cutover, file blocking beads for (i) read-side wiring, (ii) parent→child output route + linkage re-establishment, (iii) Shape-C line reconciliation** — each with an owner and a deletion/closure path. Only then does a real cutover become a transactional cutover rather than a half-ship behind a green CI badge.
+The transactional-cutover rule forbids landing those as silent green. The honest disposition is: **path-A green-up the gates, and before any main cutover, file THREE completeness blocking beads — (i) read-side wiring (§3a), (ii) parent→child `agent_output` route + linkage (§3b), (iii) the choreography-tool dispatch surface — `spawn`/`spawn_all` + child/channel `wait_for` (§3e)** — plus a fourth **process-debt** bead for Shape-C line reconciliation (§3d), each with an owner and a deletion/closure path. (Separately, flag — not block — the downstream MCP-surfacing reach for codex per §3e axis 2; do not freeze the registry `newSessionMeta` contract until proven.) Only then does a real cutover become a transactional cutover rather than a half-ship behind a green CI badge.
 
 ### Suggested next moves (cheap, in order)
 1. **Decide D1** (Gurdas): A + validation-posture, as above — or correct the frame.
 2. If A: land the **2 hard `missingReturnYieldStar` errors** first (trivial, isolated, reversible) as the bounded quick win; then the messages; then warnings; then dup/dead (after deciding whether to wire read-side first so the stub dup/dead resolves naturally).
-3. File the three blocking beads (§3a/§3b/§3d) before treating #765 as cutover-ready.
-4. Parent→child (§3b) is **not** a green-up item — it's Tier-2/§4 work; do not attempt a blind re-home.
+3. File the three completeness blocking beads (§3a read-side / §3b parent→child agent_output / §3e choreography-tool dispatch surface) + a Shape-C process-debt bead (§3d) before treating #765 as cutover-ready.
+4. Parent→child (§3b) and the choreography-tool dispatch surface (§3e) are **not** green-up items — they're Tier-2/§4 work; do not attempt a blind re-home.
 
 ---
 

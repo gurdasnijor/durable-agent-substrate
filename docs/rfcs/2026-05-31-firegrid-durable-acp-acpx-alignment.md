@@ -16,7 +16,7 @@
 
 Restate (and Temporal) sell durable execution across four *horizontal* use-cases — workflows-as-code, async tasks/timers/schedulers, microservice orchestration, event-driven apps. Their primitives (a durable log → materialized state over RocksDB; durable promises; durable timers; per-key virtual objects) are a **commodity Firegrid should not try to out-build.**
 
-Firegrid's defensible wedge is the layer those platforms leave as undifferentiated "write your own handler code," and that **bare ACP cannot make durable at all**: the *agent session protocol surface*. Concretely — durable agent **sessions**, the **ACP gateway** (both roles), **permission round-trips** as a durable rendezvous, verified **agent webhooks**, and multi-agent **peer-event graphs**. A generic durable runtime makes you hand-roll every one of these; ACP gives you the wire but no durability.
+Firegrid's defensible wedge is the layer those platforms leave as undifferentiated "write your own handler code," and that **bare ACP cannot make durable at all**: the *agent session protocol surface*. Concretely — durable agent **sessions**, the **ACP gateway** (both roles), **permission round-trips** as a durable rendezvous, verified **agent webhooks**, multi-agent **peer-event graphs**, and **agent-driven durable choreography** (`sleep`/`wait_for`/`spawn`/`schedule_me` the LLM calls itself — §5.5). A generic durable runtime makes you hand-roll every one of these; ACP gives you the wire but no durability.
 
 **What Firegrid should deliberately NOT become** (the boundary that keeps the wedge sharp):
 - A general workflow-as-code / Temporal-Restate competitor.
@@ -202,6 +202,44 @@ For each Restate AI pattern: what Restate gives (generic), what #765 already has
 
 ---
 
+## 5.5 Choreography-first: the agent participates *with* the substrate (load-bearing constraint)
+
+A load-bearing constraint from the durable-stream-agent-platform RFC (`concepts/choreography-and-combinators.md` §6.3, canonized in `docs/cannon/architecture/runtime-design-constraints.md:202-205`) that the gateway framing must **not** lose: **the application layer is choreography-first — the LLM owns sequencing, branching, parallelism, and recovery at runtime; the substrate provides durable primitives the agent *calls*, not a pre-authored workflow.** Explicitly: *"a workflow orchestration SDK must not be the primary progress model."*
+
+This is the **agent-as-participant** axis, distinct from the host-side durability §5 leans on: the agent itself reaches into the substrate to schedule, wait, and spawn — and every such call appends durable `suspended`/`resumed` records before it suspends or fans out, is claim-fenced, and is observable by humans *and* agents through the same stream-derived plane.
+
+**#765 already exposes the full surface** (`packages/protocol/src/agent-tools/schema.ts`), matching the RFC's canonical tool set:
+
+| Agent tool | Contract | Backing primitive | Status |
+|---|---|---|---|
+| `sleep(ms)` | durably suspend until a duration elapses | timer + signal | have |
+| `wait_for(channel, match, timeout?)` | suspend until a host-declared channel row matches (snapshot-first, subscribe-after-cursor) | ingress channel + signal | have — **this is how an agent waits on an external webhook/signal** (over the verified-webhook ingress, §5.3) |
+| `wait_for_any([descriptors])` | race waits over multiple ingress channels | channels + signal | have |
+| `send(channel, payload)` | append to an egress channel | egress channel | have |
+| `spawn(agent, prompt)` | run a child `RuntimeContextWorkflow`, await terminal | session + signal | schema+substrate; **host-dispatch UNWIRED on unified** — no agent-facing route + no parent→child linkage (see *reach has two axes* below) |
+| `spawn_all(tasks)` | fan out children, await all terminal | session + signal | schema+substrate; **host-dispatch UNWIRED on unified** (same as `spawn`) |
+| `schedule_me(when, prompt)` | queue a future self-prompt | timer + scheduled-prompt | have (tf-sto7 true-future durable delivery) |
+| `execute(sandbox, input)` | execute against a sandbox/tool target | sandbox + tools | have |
+
+So agent self-scheduling, waiting on webhooks/signals, and spawning children are **first-class substrate participation, not gateway add-ons.**
+
+**Resolving the apparent tension with "Firegrid leans on workflows."** §5 and the gateway framing lean heavily on the workflow engine (`RuntimeContextSessionWorkflow`, `PermissionRoundtripWorkflow`). That does **not** make Firegrid a workflow-as-code platform, and the distinction is load-bearing: **the workflow engine is substrate-internal durability machinery *under* the choreography tools — the agent (and the developer) never authors a DAG, step function, or YAML workflow.** The agent calls `wait_for`/`sleep`/`spawn`; the engine makes those calls durable/replayable/exactly-once underneath. This is the same §1 "NOT a workflow-as-code platform" wedge and the `unified/README.md` refusal of generic-fact workflows, restated as the choreography constraint: Firegrid MUST NOT require, and MUST NOT primarily expose, a workflow-orchestration SDK for agent progress.
+
+**Adjacent §6.2 constraints — coverage check:**
+- *Streams-as-truth / claim-first / restart-safe replay* → covered by §5's durability mechanics (journal source-of-truth, `insertOrGet`/`claimActivity` fences, `recoverPendingSignals`).
+- *No-in-memory-waiter* (`runtime-design-constraints.md:346` — a wait "must not require an in-memory waiter to have survived") → satisfied: waits are durable signal rows resumed on replay, not live fibers. This is also **why the local→remote handoff (§4.5) works** — a relocated session reconstructs its waits from records.
+- *Live-promptability gate* ("a durable session id does not prove the runtime owns a live promptable session") → handled via the adapter's idempotent `startOrAttach` + host-process registry; **directly relevant to relocation (§4.5)** — the new runtime must *establish* live promptability, not assume the durable id grants it.
+- *Component combinator algebra / middleware-as-serializable-topology* (trace/approve/budget/peer as combinators over the Harness; "durable topology is data") → an **application-layer/SDK concern that lives in a consumer** (the Fireline-style `agent.ts`), not the substrate — consistent with the boundary rule. The substrate must keep topology expressible as durable data, not runtime closures.
+
+**Choreography *reach* has two axes — both must hold, and the "have" column above means *schema + substrate exist*, not *reaches the LLM on #765*.** Two parallel sessions converged on this from opposite ends:
+
+1. **Host-dispatch wired on the unified path** (does `FiregridHost` actually dispatch the tool to the substrate?). *Verified gap (session 1):* `spawn` / `spawn_all` (child agent) and the child/channel `wait_for session.agent_output` route are **unwired on the unified host** — schema + substrate exist, but no agent-facing observation route is composed into `FiregridHost` and there is **no parent→child linkage** (the `unified.session.spawn` activity name in `subscribers/runtime-context.ts` is the *internal* session `startOrAttach`, not the agent tool). Dispatch-wired on unified: `schedule_me` (`ScheduledPromptWorkflow`), webhook/peer `wait_for` (observers + `awaitSignal`), tool `execute`, permission. Not yet confirmed on unified: `sleep`, generic `wait_for(channel)`, `send(channel)` egress. ⇒ a #765 blocking-bead item (see the D1 memo completeness set).
+2. **Downstream-adapter MCP-surfacing reach** (even when host-dispatched, does the catalog reach a *downstream acpx adapter's* LLM?). The choreography tools reach a downstream adapter only by being surfaced as MCP tools on `session/new`, and that path is **per-dialect**: claude needs the `_meta` `disableBuiltInTools` + `alwaysLoad` coax (the Claude SDK defers MCP behind ToolSearch); codex defers MCP by a *different* mechanism and the surfacing turn is **UN-RUN** (the divergence spike drove its turn with `mcpServers:[]`). ⇒ "does Firegrid's choreography surface reach this adapter's LLM" is **unproven for codex**.
+
+Both axes must hold for an agent to actually *use* the surface end-to-end. "Have" in the table is the primitive existing, not an LLM reaching it on #765.
+
+**Known choreography gaps (from `docs/cannon/sdds/SDD_FIREGRID_AGENT_BODY_PLAN.md`):** the inter-agent **`event(name)` peer-pheromone channel** (the choreography thesis's strongest case) and **`session.self.lifecycle` / `session.self.checkpoint` interoception** are not yet exposed agent-facing — the substrate exists (peer-events board, `CallerFact` streams) but the agent-facing channel wrappers are unbuilt. These are the highest-leverage *additions* to the choreography surface and belong on the agent-native roadmap (§9).
+
 ## 6. The acpx adapter fleet (downward role) + conformance
 
 (From the prior alignment; unchanged in substance, now framed as the gateway's *client* face.)
@@ -216,6 +254,8 @@ For each Restate AI pattern: what Restate gives (generic), what #765 already has
 **Where the long-tail cost actually lives:** per-agent ACP **dialect quirks** (handshake `_meta`, capability negotiation, tool-mode, cancellation). That's the only cost that scales with N — and harvesting outsources it to the parties closest to each agent. The conformance suite is what keeps that maintenance bounded.
 
 **Conformance (`acp-core-v1`)** tests the **agent role** (initialize / session/new / session/prompt / session/update / session/cancel + error semantics; `session/cancel` MUST → cancelled terminal state). Two uses: validate the adapters we drive (Direction-A dependency check); and — the load-bearing one — **gate Firegrid's own agent face** (Direction B). Zed external agents is a *conformance forcing-function with a UI* (but Zed's own dialect — MCP forwarding, model/mode — means conformance-green ≠ Zed-green; need both).
+
+**Residual risk — "config not code" holds, but rests on one un-run MCP-surfacing path.** The divergence spike proved fleet onboarding ≈ *configuration*: codex-acp + claude-agent-acp both ran a full turn through the **unmodified** codec, and the only per-dialect *code* is the claude `session/new._meta` (which codex received and ignored). That verdict **holds** — but its choreography-reach half rests on a single un-run path (§5.5 axis 2): the spike drove its turn with `mcpServers:[]`, so no adapter has been shown to actually expose Firegrid's `wait_for`/`schedule_me`/`spawn` catalog to its LLM. The per-dialect divergence is concentrated in one registry field (`newSessionMeta` / MCP-surfacing), so this is a *measurement* gap, not an architecture gap — **but do NOT freeze the registry `newSessionMeta` contract until a follow-up spike drives a `wait_for`/`schedule_me` turn through each adapter and asserts the LLM can call the tool.**
 
 ---
 
@@ -279,7 +319,8 @@ Each is a substrate/edge feature, not ergonomics — they belong in the gateway.
 - **ACP dialect drift** — "ACP" varies per adapter. *Falsifier:* per-adapter conformance pass; registry records quirks.
 - **`provider_executed` vs `observation_only` tool modes** — changes permission/tool wiring. *Falsifier:* tool-dispatch test per mode.
 - **Cancellation semantics** — conformance needs a cancelled *terminal state*; today scope-close. *Falsifier:* `session/cancel` case green with an observable cancelled row.
-- **#765 cutover incompleteness** — read-side stubs + deleted #746/#748 regressions ⇒ green ≠ complete. *Falsifier:* read-side returns real rows; re-homed regressions pass on the unified path.
+- **#765 cutover incompleteness** — read-side stubs + deleted #746/#748 regressions + the **choreography-tool dispatch surface (`spawn`/`spawn_all` + child/channel `wait_for`) unwired on the unified host** ⇒ green ≠ complete. *Falsifier:* read-side returns real rows; re-homed regressions pass on the unified path; an agent-driven `spawn`/`wait_for` turn dispatches through `FiregridHost`.
+- **Choreography surface reaches each dialect LLM** — the agent-tool catalog reaches a downstream adapter's LLM only via per-dialect MCP-surfacing on `session/new`; proven for claude (`_meta` coax), **still open for codex** (un-run; the spike used `mcpServers:[]`). *Falsifier:* drive a `wait_for`/`schedule_me` turn through each adapter with the Firegrid MCP catalog attached and assert the LLM calls the tool — before freezing the registry `newSessionMeta` contract.
 - **Boundary erosion** — durable-acpx work adding CLI/flows/config to core. *Falsifier:* every ergonomics feature lands in a consumer pkg.
 - **Agent-face orphan** — `AcpStdioEdge` has no production consumer on #765. *Falsifier:* an `apps/` binary composes it, or it's explicitly unshipped.
 
@@ -310,3 +351,4 @@ Conformance suite wiring can run in parallel from the start (decoupled, useful r
 7. **Rearch-line reconciliation:** several capabilities here (parent/child, read-side) were proven on branches #765's deletion abandons — reconcile before building forward.
 8. **In-process runtime backends:** should §4.3's runtime tier admit in-process SDK agents (e.g. `headless-coder-sdk`) as first-class — producing an `AgentSessionService` with no subprocess — or require every agent to be a subprocess behind a byte stream (shim the SDK)? (§6.5 tier 2.) Decides whether non-ACP SDKs integrate in-process or via a stdio shim.
 9. **Local→remote relocation semantics (§4.5):** is the handoff *restart-attach* against a shared durable-streams namespace (process dies here, re-spawns there, re-attaches via `createOrLoad` + `recoverPendingSignals`), or does any use case need *live* session migration? And is runtime-backend selection a deploy-time composition choice or a runtime placement decision owned by the control plane (ties to **D4**)?
+10. **Choreography surface completion (§5.5):** prioritize the unbuilt agent-facing primitives — `event(name)` peer-pheromone (the strongest inter-agent-coordination case) and `session.self.*` interoception. Both have substrate but no agent-facing channel wrapper. Which lands first, and does `event(name)` reshape `CallerFact` streams or get a dedicated typed event channel (avoid substrate leak)?
