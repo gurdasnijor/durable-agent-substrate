@@ -124,7 +124,7 @@ const encodePermissionResponsePayload = (
   }
   return {
     kind: "permission-response",
-    payloadJson: JSON.stringify(encodeAgentInputEvent(event as never)),
+    payloadJson: JSON.stringify(encodeAgentInputEvent(event)),
   }
 }
 
@@ -242,7 +242,7 @@ export const HostPromptChannelSignalingLive = Layer.effect(
           return eventOffset(`${String(HostPromptChannelTarget)}:${executionId}|${correlationId}`)
         }).pipe(Effect.provideService(WorkflowEngine.WorkflowEngine, engine))
       },
-    }) as unknown as HostPromptChannel["Type"]
+    })
   }),
 )
 
@@ -284,7 +284,7 @@ export const SessionPromptChannelSignalingLive = Layer.effect(
               return eventOffset(`${String(SessionPromptChannelTarget)}:${executionId}|${correlationId}`)
             }).pipe(Effect.provideService(WorkflowEngine.WorkflowEngine, engine))
           },
-        }) as unknown as ReturnType<SessionPromptChannel["Type"]["forSession"]>,
+        }),
     })
   }),
 )
@@ -458,7 +458,7 @@ export const HostContextSnapshotChannelLive = Layer.succeed(
         events: [] as ReadonlyArray<unknown>,
         logs: [] as ReadonlyArray<unknown>,
         agentOutputs: [],
-      } as unknown as typeof RuntimeContextSnapshotSchema.Type),
+      }),
   }),
 )
 
@@ -475,7 +475,7 @@ export const HostSessionSnapshotChannelLive = Layer.succeed(
         events: [] as ReadonlyArray<unknown>,
         logs: [] as ReadonlyArray<unknown>,
         agentOutputs: [],
-      } as unknown as typeof RuntimeContextSnapshotSchema.Type),
+      }),
   }),
 )
 

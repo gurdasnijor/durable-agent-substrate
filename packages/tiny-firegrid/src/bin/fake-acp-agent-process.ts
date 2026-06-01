@@ -23,6 +23,7 @@ import {
   PermissionFixtureAgent,
 } from "../simulations/unified-kernel-validation/acp-fixture-agent.ts"
 
+// effect-quality-allow-process-env — bin entrypoint: scenario-9 subprocess fixture selector
 const flavor = process.env["FIREGRID_FAKE_ACP_FIXTURE"] ?? "default"
 
 const make = (connection: acp.AgentSideConnection): acp.Agent => {

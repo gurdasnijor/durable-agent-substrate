@@ -38,9 +38,6 @@
 
 import { IdGenerator } from "@effect/ai"
 import { NodeContext } from "@effect/platform-node"
-import {
-  WorkflowEngine,
-} from "@effect/workflow"
 import { Effect, Layer } from "effect"
 import type { DurableTableHeaders } from "effect-durable-operators"
 import {
@@ -53,7 +50,7 @@ import {
   LocalProcessSandboxProvider,
   RuntimeEnvResolverPolicy,
 } from "../sources/sandbox/index.ts"
-import { RuntimeContextSessionAdapter } from "./adapter.ts"
+import { type RuntimeContextSessionAdapter } from "./adapter.ts"
 import {
   ContextResolverFromControlPlaneTableLive,
   ProductionCodecAdapterLive,
@@ -96,9 +93,10 @@ export interface FiregridHostOptionsBase {
   /**
    * Optional override for the tool executor. Default echoes the input —
    * suitable for sims, not production. Production hosts MUST supply a
-   * real executor Layer.
+   * real executor, e.g. `makeToolExecutor(fn)` (which yields an
+   * `Effect<ToolExecutor>`).
    */
-  readonly toolExecutor?: Layer.Layer<ToolExecutor>
+  readonly toolExecutor?: Effect.Effect<ToolExecutor>
   /**
    * Optional override for the env-binding resolver policy. Used by
    * `ProductionCodecAdapterLive` to resolve `RuntimeEnvBinding.ref`
@@ -231,8 +229,8 @@ const engineLayer = (options: FiregridHostOptions) =>
  * Override any individual Tag via `.pipe(Layer.provide(MyLive))`.
  */
 export const FiregridHost = (options: FiregridHostOptions) => {
-  const toolExecutorEffect = makeToolExecutor((p) =>
-    JSON.stringify({ tool: p.toolName, input: JSON.parse(p.inputJson) }),
+  const defaultToolExecutorEffect = makeToolExecutor((p) =>
+    JSON.stringify({ tool: p.toolName, input: JSON.parse(p.inputJson) as unknown }),
   )
 
   const adapterLayer = hasAdapter(options)
@@ -245,7 +243,7 @@ export const FiregridHost = (options: FiregridHostOptions) => {
 
   return Layer.unwrapEffect(
     Effect.gen(function*() {
-      const toolExecutor = yield* toolExecutorEffect
+      const toolExecutor = yield* (options.toolExecutor ?? defaultToolExecutorEffect)
       const workflowLayers = Layer.mergeAll(
         RuntimeContextSessionWorkflowLayer.pipe(Layer.provide(adapterLayer)),
         buildPermissionRoundtripLayer(),

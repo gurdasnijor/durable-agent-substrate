@@ -19,10 +19,8 @@ describe("session permission channel contract", () => {
       responseOrigin: "test",
     })
     const response = Schema.decodeUnknownSync(SessionPermissionChannelResponseSchema)({
-      responded: true,
-      contextId: "ctx-1",
-      permissionRequestId: "perm-1",
-      inputId: "intent-1",
+      offset: "evt-offset-1",
+      deduplicated: false,
     })
     const channel = makeSessionPermissionChannelContract({
       call: () => Effect.succeed(response),

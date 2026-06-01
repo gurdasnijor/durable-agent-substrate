@@ -29,7 +29,7 @@
 
 import { NodeContext } from "@effect/platform-node"
 import { IdGenerator } from "@effect/ai"
-import { WorkflowEngine } from "@effect/workflow"
+import { type WorkflowEngine } from "@effect/workflow"
 import {
   HostPlaneChannelRouter,
 } from "@firegrid/runtime/channels"
@@ -133,7 +133,7 @@ const fullCatalog = makeCatalog([
   PeerEventObserverWorkflow,
 ])
 
-const tableLayer = <T,>(
+const tableLayer = <T>(
   cls: {
     layer: (options: {
       readonly streamOptions: { readonly url: string; readonly contentType: string }
@@ -185,6 +185,7 @@ const realClaudeAcpBin = (() => {
     return undefined
   }
 })()
+// effect-quality-allow-process-env — env gate for the manual real-claude-acp live scenario
 const useRealClaudeAcp = process.env["FIREGRID_UKV_USE_REAL_CLAUDE_ACP"] === "1"
   && realClaudeAcpBin !== undefined
 
@@ -231,6 +232,7 @@ const staticContextResolver = (
 export const productionFlowAcpLiveScenario = (
   urls: ProductionFlowAcpLiveUrls,
 ): Effect.Effect<ProductionFlowAcpLiveResult, unknown> => {
+  // effect-quality-allow-process-env — env gate for the manual real-subprocess live scenario
   const enabled = process.env["FIREGRID_UKV_RUN_ACP_LIVE"] === "1"
   if (!enabled) {
     return Effect.succeed({

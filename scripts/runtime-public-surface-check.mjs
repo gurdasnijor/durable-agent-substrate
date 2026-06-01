@@ -46,8 +46,7 @@ const requiredTargetSurfaces = [
   "producers",
   "transforms",
   "channels",
-  "subscribers",
-  "composition",
+  "unified",
   "_archive",
 ]
 

@@ -26,8 +26,7 @@ the surfaces below exists and is documented here:
 | [`producers/`](./producers/README.md) | Kafka-broker "Producer" topic writers: layers that consume Streams from `sources/` and append rows to `tables/`. | 3b |
 | [`transforms/`](./transforms/README.md) | pure row/event transforms; no `Effect`. | 4 |
 | [`channels/`](./channels/README.md) | wire-edge live routing (`host-control/`, `session/`, `routes/`, `router.ts`). | 5 |
-| [`subscribers/`](./subscribers/README.md) | keyed subscribers — Shape B/C/D recorded in folder READMEs. | 6 |
-| [`composition/`](./composition/README.md) | runtime-local layer-graph wiring + topology checks. | 7 |
+| [`unified/`](./unified/README.md) | unified subscriber kernel: the durable `signal` primitive, signal-based subscriber workflows (session / permission / tool / scheduled / webhook / peer), the codec adapter, channel bindings, the journal observer, and the `FiregridHost` production composition factory. Replaces the former Shape C `subscribers/` + `composition/` tiers. | 6 |
 | [`bin/`](./bin/) | runtime-owned daemon/process entrypoints (`firegrid run`, `firegrid start`, `firegrid acp`); outside pipeline order and may compose public client + runtime host surfaces. | — |
 | [`_archive/`](./_archive/DEPRECATED.md) | time-boxed holding pen for wrong-shape code pending deletion. | — |
 
