@@ -1,0 +1,1215 @@
+// Copyright (c) 2023 - 2026 Restate Software, Inc., Restate GmbH.
+// All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+// When expose-internals makes this module `pub`, some internal types referenced
+// by `PartitionProcessor` and `ProcessorError` become visible but remain
+// `pub(crate)`. This is expected -- benchmarks only use `state_machine`.
+#![cfg_attr(
+    feature = "expose-internals",
+    allow(private_interfaces, private_bounds)
+)]
+
+mod cleaner;
+pub mod invoker_storage_reader;
+mod leadership;
+mod rpc;
+pub mod shuffle;
+#[cfg(feature = "expose-internals")]
+pub mod state_machine;
+#[cfg(not(feature = "expose-internals"))]
+mod state_machine;
+pub mod types;
+
+use std::fmt::Debug;
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::Context;
+use assert2::let_assert;
+use futures::{FutureExt, Stream, StreamExt};
+use metrics::{gauge, histogram};
+use tokio::sync::watch;
+use tokio::time::{Instant, MissedTickBehavior};
+use tracing::{Span, debug, error, info, instrument, trace, warn};
+
+use restate_bifrost::loglet::FindTailOptions;
+use restate_bifrost::{Bifrost, LogEntry, MaybeRecord};
+use restate_core::network::{
+    Incoming, Oneshot, Reciprocal, Rpc, ServiceMessage, ServiceStream, TransportConnect, Verdict,
+};
+use restate_core::{
+    Metadata, ShutdownError, TaskCenter, TaskKind, cancellation_watcher, my_node_id,
+};
+use restate_ingestion_client::IngestionClient;
+use restate_partition_store::{PartitionStore, PartitionStoreTransaction};
+use restate_storage_api::deduplication_table::{
+    DedupInformation, DedupSequenceNumber, ProducerId, ReadDeduplicationTable,
+    WriteDeduplicationTable,
+};
+use restate_storage_api::fsm_table::{
+    CachedEpochMetadata, PartitionDurability, ReadFsmTable, WriteFsmTable,
+};
+use restate_storage_api::outbox_table::ReadOutboxTable;
+use restate_storage_api::{StorageError, Transaction};
+use restate_types::cluster::cluster_state::{PartitionProcessorStatus, ReplayStatus, RunMode};
+use restate_types::config::Configuration;
+use restate_types::epoch::EpochMetadata;
+use restate_types::identifiers::LeaderEpoch;
+use restate_types::logs::{
+    KeyFilter, Keys, Lsn, MatchKeyQuery, Record, RecordDecodeError, SequenceNumber,
+};
+use restate_types::net::ingest::{
+    DedupSequenceNrQueryRequest, DedupSequenceNrQueryResponse, ReceivedIngestRequest,
+    ResponseStatus,
+};
+use restate_types::net::partition_processor::{
+    PartitionLeaderService, PartitionProcessorRpcError, PartitionProcessorRpcRequest,
+    PartitionProcessorRpcResponse,
+};
+use restate_types::net::{RpcRequest, ingest};
+use restate_types::partitions::PartitionFeatureChange;
+use restate_types::partitions::state::PartitionReplicaSetStates;
+use restate_types::retries::{RetryPolicy, with_jitter};
+use restate_types::schema::Schema;
+use restate_types::storage::StorageDecodeError;
+use restate_types::time::{MillisSinceEpoch, NanosSinceEpoch};
+use restate_types::{GenerationalNodeId, SemanticRestateVersion, Version, Versioned};
+use restate_util_string::{ReString, ToReString};
+use restate_util_time::DurationExt;
+use restate_vqueues::{VQueuesMeta, VQueuesMetaCache};
+use restate_wal_protocol::control::{
+    AnnounceLeaderCommand, CurrentReplicaSetConfiguration, NextReplicaSetConfiguration,
+};
+use restate_wal_protocol::v2::commands;
+use restate_wal_protocol::{Envelope, v2};
+use restate_worker_api::invoker::capacity::InvokerCapacity;
+use restate_worker_api::{LeaderQueryCommand, LeaderQueryReceiver};
+
+use self::leadership::trim_queue::TrimQueue;
+use crate::metric_definitions::{
+    FLARE_REASON_VERSION_BARRIER, LEADER_LABEL, LEADER_LABEL_FOLLOWER, LEADER_LABEL_LEADER,
+    PARTITION_BLOCKED_FLARE, PARTITION_INGESTION_REQUEST_LEN, PARTITION_INGESTION_REQUEST_SIZE,
+    PARTITION_LABEL, PARTITION_RECORD_COMMITTED_TO_READ_LATENCY_SECONDS, REASON_LABEL,
+};
+use crate::partition::leadership::LeadershipState;
+use crate::partition::state_machine::{ActionCollector, StateMachine};
+use crate::partition_processor_manager::PartitionLeaderHandlesRegistry;
+use crate::rule_book_cache::RuleBookCacheHandle;
+
+// Soft cap for the in-memory vqueue cache; once reached, inactive
+// entries are evicted at insert time. The cache will still grow past
+// this if compaction frees nothing.
+const VQUEUE_CACHE_CAPACITY: usize = 10_000;
+
+/// Information needed to run as leader, including the epoch and partition configurations.
+#[derive(Clone, Debug)]
+pub struct LeadershipInfo {
+    pub version: Version,
+    pub leader_epoch: LeaderEpoch,
+    pub current_config: CurrentReplicaSetConfiguration,
+    pub next_config: Option<NextReplicaSetConfiguration>,
+}
+
+impl From<EpochMetadata> for LeadershipInfo {
+    fn from(value: EpochMetadata) -> Self {
+        let (version, leader_epoch, current, next, _) = value.into_inner();
+
+        Self {
+            version,
+            leader_epoch,
+            current_config: current.into(),
+            next_config: next.map(|c| c.into()),
+        }
+    }
+}
+
+/// Target leader state of the partition processor.
+#[derive(Clone, Debug, Default)]
+pub enum TargetLeaderState {
+    Leader(Box<LeadershipInfo>),
+    #[default]
+    Follower,
+}
+
+pub(super) struct PartitionProcessorBuilder {
+    status: PartitionProcessorStatus,
+    target_leader_state_rx: watch::Receiver<TargetLeaderState>,
+    network_svc_rx: ServiceStream<PartitionLeaderService>,
+    status_watch_tx: watch::Sender<PartitionProcessorStatus>,
+    invoker_capacity: InvokerCapacity,
+    leader_handles_registry: PartitionLeaderHandlesRegistry,
+    rule_book_cache: RuleBookCacheHandle,
+}
+
+impl PartitionProcessorBuilder {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new(
+        status: PartitionProcessorStatus,
+        target_leader_state_rx: watch::Receiver<TargetLeaderState>,
+        network_svc_rx: ServiceStream<PartitionLeaderService>,
+        status_watch_tx: watch::Sender<PartitionProcessorStatus>,
+        invoker_capacity: InvokerCapacity,
+        leader_handles_registry: PartitionLeaderHandlesRegistry,
+        rule_book_cache: RuleBookCacheHandle,
+    ) -> Self {
+        Self {
+            status,
+            target_leader_state_rx,
+            network_svc_rx,
+            status_watch_tx,
+            invoker_capacity,
+            leader_handles_registry,
+            rule_book_cache,
+        }
+    }
+
+    pub async fn build<T>(
+        self,
+        bifrost: Bifrost,
+        ingestion_client: IngestionClient<T, Envelope>,
+        mut partition_store: PartitionStore,
+        replica_set_states: PartitionReplicaSetStates,
+    ) -> Result<PartitionProcessor<T>, state_machine::Error>
+    where
+        T: TransportConnect,
+    {
+        let PartitionProcessorBuilder {
+            target_leader_state_rx,
+            network_svc_rx: rpc_rx,
+            status_watch_tx,
+            mut status,
+            invoker_capacity,
+            leader_handles_registry,
+            rule_book_cache,
+        } = self;
+
+        let partition_id_str = partition_store.partition_id().to_restring();
+        let state_machine =
+            Self::create_state_machine(&mut partition_store, rule_book_cache.clone()).await?;
+
+        let trim_queue = TrimQueue::default();
+        if let Some(ref partition_durability) = partition_store.get_partition_durability().await? {
+            trim_queue.push(partition_durability);
+        }
+
+        let last_seen_leader_epoch = partition_store
+            .get_dedup_sequence_number(&ProducerId::self_producer())
+            .await?
+            .map(|dedup| {
+                let_assert!(
+                    DedupSequenceNumber::Esn(esn) = dedup,
+                    "self producer must store epoch sequence numbers!"
+                );
+                esn.leader_epoch
+            });
+
+        // Load persisted partition configuration state (since v1.6)
+        let cached_epoch_metadata = partition_store.get_partition_config_state().await?;
+
+        if let Some(last_leader_epoch) = last_seen_leader_epoch {
+            replica_set_states.note_observed_leader(
+                partition_store.partition_id(),
+                restate_types::partitions::state::LeadershipState {
+                    current_leader_epoch: last_leader_epoch,
+                    // we don't know the old leader node-id, another node might update it
+                    current_leader: GenerationalNodeId::INVALID,
+                },
+            );
+        }
+
+        // Yes, I know how awkward this looks. This is temporary until the scheduler
+        // is taskified. The scheduler will respond to its status queries directly
+        // instead of piping this through the partition processor's main select!
+        let (leader_query_tx, leader_query_rx) = restate_worker_api::channel();
+
+        let leadership_state = LeadershipState::new(
+            Arc::clone(partition_store.partition()),
+            invoker_capacity,
+            ingestion_client,
+            bifrost.clone(),
+            last_seen_leader_epoch,
+            trim_queue.clone(),
+            leader_query_tx,
+            leader_handles_registry,
+            rule_book_cache,
+        );
+
+        let last_applied_log_lsn_watch = watch::Sender::new(Lsn::INVALID);
+        // The storage version does not change after having opened the partition store
+        status.storage_version = Some(partition_store.storage_version());
+
+        Ok(PartitionProcessor {
+            key_filter: KeyFilter::Within(partition_store.partition_key_range().into()),
+            partition_id_str,
+            leadership_state,
+            state_machine,
+            partition_store,
+            bifrost,
+            target_leader_state_rx,
+            network_leader_svc_rx: rpc_rx,
+            status_watch_tx,
+            leader_query_rx,
+            status,
+            replica_set_states,
+            trim_queue,
+            last_applied_log_lsn_watch,
+            cached_epoch_metadata,
+        })
+    }
+
+    async fn create_state_machine(
+        partition_store: &mut PartitionStore,
+        rule_book_cache: RuleBookCacheHandle,
+    ) -> Result<StateMachine, state_machine::Error> {
+        let inbox_seq_number = partition_store.get_inbox_seq_number().await?;
+        let outbox_seq_number = partition_store.get_outbox_seq_number().await?;
+        let outbox_head_seq_number = partition_store.get_outbox_head_seq_number().await?;
+        let min_restate_version = partition_store.get_min_restate_version().await?;
+        let mut enabled_features = partition_store.get_state_machine_features().await?;
+
+        // for backward compatibility because PartitionFeatureChanges were only introduced with v1.7,
+        // we need to enable journal v2 if the min restate version is >= v1.6.0
+        if !enabled_features.journal_v2
+            && min_restate_version.is_equal_or_newer_than(
+                PartitionFeatureChange::EnableJournalV2.min_required_version(),
+            )
+        {
+            PartitionFeatureChange::EnableJournalV2.apply_to(&mut enabled_features);
+
+            // update the internal storage
+            let mut txn = partition_store.transaction();
+            txn.put_state_machine_features(&enabled_features)?;
+            txn.commit().await?;
+        }
+
+        let schema = partition_store.get_schema().await?;
+        let rule_book = Arc::new(partition_store.get_rule_book().await?.unwrap_or_default());
+
+        if !SemanticRestateVersion::current().is_equal_or_newer_than(&min_restate_version) {
+            gauge!(PARTITION_BLOCKED_FLARE, PARTITION_LABEL =>
+                partition_store.partition_id().to_string(),
+                REASON_LABEL => FLARE_REASON_VERSION_BARRIER
+            )
+            .set(1);
+            return Err(state_machine::Error::VersionBarrier {
+                required_min_version: min_restate_version,
+                barrier_reason: String::new(),
+                feature_changes: Vec::default(),
+            });
+        }
+
+        // Seed the cache with whatever we just loaded from the FSM
+        // table, so a freshly-restarted PP doesn't briefly serve the
+        // empty default to subscribers between PP boot and the first
+        // metadata-store poll.
+        rule_book_cache.notify_observed(&rule_book);
+
+        let state_machine = StateMachine::new(
+            inbox_seq_number,
+            outbox_seq_number,
+            outbox_head_seq_number,
+            partition_store.partition_key_range(),
+            min_restate_version,
+            enabled_features,
+            schema,
+            rule_book,
+            rule_book_cache,
+        );
+
+        Ok(state_machine)
+    }
+}
+
+pub struct PartitionProcessor<T> {
+    partition_id_str: ReString,
+    leadership_state: LeadershipState<T>,
+    state_machine: StateMachine,
+    bifrost: Bifrost,
+    target_leader_state_rx: watch::Receiver<TargetLeaderState>,
+    network_leader_svc_rx: ServiceStream<PartitionLeaderService>,
+    status_watch_tx: watch::Sender<PartitionProcessorStatus>,
+    leader_query_rx: LeaderQueryReceiver,
+    status: PartitionProcessorStatus,
+    replica_set_states: PartitionReplicaSetStates,
+
+    partition_store: PartitionStore,
+    trim_queue: TrimQueue,
+
+    last_applied_log_lsn_watch: watch::Sender<Lsn>,
+    cached_epoch_metadata: Option<CachedEpochMetadata>,
+    key_filter: KeyFilter,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ProcessorError {
+    /// Indicates that the processor encountered a trim gap in the log.
+    /// This is a signal to the PartitionProcessorManager to attempt to restart
+    /// the processor for this partition. This might occur after the first startup
+    /// of a worker that's been down while a log trim occurred, and recoverable
+    /// as long as we can find a snapshot with a min LSN of trim_gap_end or later.
+    #[error("[{read_pointer}..{trim_gap_end}]")]
+    TrimGapEncountered {
+        read_pointer: Lsn,
+        trim_gap_end: Lsn,
+    },
+    #[error("[{read_pointer}..{data_loss_gap_end}]")]
+    DataLossGapEncountered {
+        read_pointer: Lsn,
+        data_loss_gap_end: Lsn,
+    },
+    #[error(
+        "partition appears to be ahead of the log, \
+    this indicates data-loss in the log or that partition mismatches its backing log. partition_applied_lsn: {partition_applied_lsn}, log_tail_lsn: {log_tail_lsn}"
+    )]
+    PartitionAheadOfLog {
+        partition_applied_lsn: Lsn,
+        log_tail_lsn: Lsn,
+    },
+    #[error(transparent)]
+    Storage(#[from] StorageError),
+    #[error(transparent)]
+    Decode(#[from] StorageDecodeError),
+    #[error(transparent)]
+    Bifrost(#[from] restate_bifrost::Error),
+    #[error(transparent)]
+    StoreOpen(#[from] restate_partition_store::OpenError),
+    #[error(transparent)]
+    StateMachine(#[from] state_machine::Error),
+    #[error(transparent)]
+    ActionEffect(#[from] leadership::Error),
+    #[error(transparent)]
+    ShutdownError(#[from] ShutdownError),
+    #[error("log read stream has terminated")]
+    LogReadStreamTerminated,
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+struct LsnEnvelope {
+    pub lsn: Lsn,
+    pub keys: Keys,
+    pub created_at: NanosSinceEpoch,
+    pub envelope: Arc<v2::Envelope<v2::Raw>>,
+}
+
+/// OrderedOperations are scheduled operations that
+/// will only get executed once the partition read up to
+/// the bifrost tail that was found once the operation
+/// was submitted.
+enum OrderedOp {
+    QueryLegacyDedupSn {
+        request: Incoming<Rpc<DedupSequenceNrQueryRequest>>,
+    },
+}
+
+impl<T> PartitionProcessor<T>
+where
+    T: TransportConnect,
+{
+    #[instrument(
+        level = "error", skip_all,
+        fields(partition_id = %self.partition_store.partition_id())
+    )]
+    pub async fn run(mut self) -> Result<(), ProcessorError> {
+        debug!("Starting the partition processor.");
+
+        let res = tokio::select! {
+            res = self.run_inner() => {
+                match res.as_ref() {
+                    // run_inner never returns normally
+                    Ok(_) => warn!("Shutting partition processor down because it stopped unexpectedly."),
+                    Err(ProcessorError::TrimGapEncountered { trim_gap_end, read_pointer }) =>
+                        info!(
+                            %read_pointer,
+                            %trim_gap_end,
+                            "Shutting partition processor down because it encountered a trim gap in the log."
+                        ),
+                    Err(ProcessorError::StateMachine(state_machine::Error::VersionBarrier { .. })) => {
+                        gauge!(PARTITION_BLOCKED_FLARE, PARTITION_LABEL => self.partition_id_str, REASON_LABEL => FLARE_REASON_VERSION_BARRIER).set(1);
+                    }
+                    Err(err) => warn!("Shutting partition processor down because of error: {err}"),
+                }
+                res
+            },
+            _ = cancellation_watcher() => {
+                debug!("Shutting partition processor down because it was cancelled.");
+                Ok(())
+            },
+        };
+
+        // clean up pending rpcs and stop child tasks
+        self.leadership_state.step_down().await;
+
+        // Drain leader network service
+        self.network_leader_svc_rx.close();
+        while let Some(msg) = self.network_leader_svc_rx.next().await {
+            // signals that we are not the leader anymore
+            msg.fail(Verdict::SortCodeNotFound);
+        }
+
+        res
+    }
+
+    /// Decode record tries to decode the record first as v2 Envelope, if it failed,
+    /// it decodes as v1 Envelope then converts into v2.
+    fn decode_record(record: Record) -> Result<Arc<v2::Envelope<v2::Raw>>, StorageDecodeError> {
+        let envelope = match record.decode_arc::<v2::Envelope<v2::Raw>>() {
+            Ok(envelope) => envelope,
+            Err(RecordDecodeError::TypedValueMismatch(v1_envelope)) => {
+                let v1_envelope: Arc<Envelope> = v1_envelope
+                    .downcast_arc()
+                    .map_err(|_| StorageDecodeError::DecodeValue("Type mismatch. Record value in PolyBytes::Typed does not match requested type".into()))?;
+
+                let v1_envelope = match Arc::try_unwrap(v1_envelope) {
+                    Ok(v1_envelope) => v1_envelope,
+                    Err(arc) => arc.as_ref().clone(),
+                };
+
+                let envelope: v2::Envelope<v2::Raw> = v1_envelope
+                    .try_into()
+                    .map_err(|err: anyhow::Error| StorageDecodeError::DecodeValue(err.into()))?;
+
+                Arc::new(envelope)
+            }
+            Err(RecordDecodeError::StorageDecodeError(err)) => return Err(err),
+        };
+
+        Ok(envelope)
+    }
+
+    async fn run_inner(&mut self) -> Result<(), ProcessorError> {
+        let mut partition_store = self.partition_store.clone();
+
+        // Important to note: This only runs the migration for the given partition store. In a setup,
+        // where not every node runs every partition, it can happen that partition data remains
+        // untouched when going from one version to the next.
+        // todo https://github.com/restatedev/restate/issues/4175.
+        partition_store.verify_and_run_migrations().await?;
+
+        let last_applied_lsn = partition_store
+            .get_applied_lsn()
+            .await?
+            .unwrap_or(Lsn::INVALID);
+
+        self.last_applied_log_lsn_watch
+            .send_replace(last_applied_lsn);
+        let last_applied_lsn_watch = self.last_applied_log_lsn_watch.subscribe();
+
+        let log_id = self.partition_store.partition().log_id();
+        let partition_id = self.partition_store.partition_id();
+        let my_node = my_node_id().as_plain();
+
+        self.status.last_applied_log_lsn = Some(last_applied_lsn);
+        let mut durable_lsn_watch = self.partition_store.get_durable_lsn().await?;
+        let durable_lsn = durable_lsn_watch
+            .borrow_and_update()
+            .unwrap_or(Lsn::INVALID);
+        self.status.durable_lsn = Some(durable_lsn);
+        self.replica_set_states
+            .note_durable_lsn(partition_id, my_node, durable_lsn);
+
+        // If the underlying log is not provisioned, now is the time to provision it.
+        // We'll retry a few times before giving back control to PPM
+        //
+        // The primary reason for retries is the initial cluster provision case where nodes might
+        // still be starting up and we don't have enough nodes to form legal nodesets.
+        let mut retries = RetryPolicy::exponential(
+            Duration::from_secs(1),
+            1.5,
+            Some(3),
+            Some(Duration::from_secs(5)),
+        )
+        .into_iter();
+        while let Err(e) = self.bifrost.admin().ensure_log_exists(log_id).await {
+            // We cannot provision the log for this partition
+            if let Some(dur) = retries.next() {
+                debug!(
+                    "Cannot create a bifrost log for partition {}, will retry in {:?}; reason={}",
+                    partition_id, dur, e
+                );
+                tokio::time::sleep(dur).await;
+            } else {
+                return Err(e.into());
+            }
+        }
+
+        debug!("Finding tail for partition",);
+        // propagate errors and let the PPM handle error retries
+        let current_tail = self
+            .bifrost
+            .find_tail(log_id, FindTailOptions::ConsistentRead)
+            .await?;
+
+        // If our `last_applied_lsn` is at or beyond the tail, this is a strong indicator
+        // that the log has reverted backwards.
+        if last_applied_lsn >= current_tail.offset() {
+            return Err(ProcessorError::PartitionAheadOfLog {
+                partition_applied_lsn: last_applied_lsn,
+                log_tail_lsn: current_tail.offset(),
+            });
+        }
+
+        debug!(
+            last_applied_lsn = %last_applied_lsn,
+            current_log_tail = %current_tail,
+            "Partition creating log reader",
+        );
+        if current_tail.offset() == last_applied_lsn.next() {
+            if self.status.replay_status != ReplayStatus::Active {
+                self.status.target_tail_lsn = None;
+                self.status.replay_status = ReplayStatus::Active;
+            }
+        } else {
+            // catching up.
+            self.status.target_tail_lsn = Some(current_tail.offset());
+            self.status.replay_status = ReplayStatus::CatchingUp;
+        }
+
+        let mut live_config = Configuration::live();
+        let mut live_schemas = Metadata::with_current(|m| m.updateable_schema());
+
+        // Telemetry setup
+        let leader_record_write_to_read_latency = histogram!(PARTITION_RECORD_COMMITTED_TO_READ_LATENCY_SECONDS, LEADER_LABEL => LEADER_LABEL_LEADER);
+        let follower_record_write_to_read_latency = histogram!(PARTITION_RECORD_COMMITTED_TO_READ_LATENCY_SECONDS, LEADER_LABEL => LEADER_LABEL_FOLLOWER);
+        // Start reading after the last applied lsn
+
+        let mut record_stream = self.bifrost.create_reader(
+            log_id,
+            KeyFilter::Within(self.partition_store.partition_key_range().into()),
+            last_applied_lsn.next(),
+            Lsn::MAX,
+        )?;
+
+        // avoid synchronized timers.
+        let mut status_update_timer =
+            tokio::time::interval(with_jitter(Duration::from_millis(500), 0.5));
+        status_update_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        let mut vqueues = VQueuesMetaCache::create(
+            partition_store.partition_db().clone(),
+            VQUEUE_CACHE_CAPACITY,
+        )
+        .await?;
+
+        let mut action_collector = ActionCollector::default();
+        let mut command_buffer =
+            Vec::with_capacity(live_config.live_load().worker.max_command_batch_size());
+
+        let mut watch_leader_changes = self.replica_set_states.watch_leadership_state(partition_id);
+        watch_leader_changes.mark_changed();
+
+        let started_at = Instant::now();
+        if self.status.replay_status == ReplayStatus::CatchingUp {
+            let catchup_len = current_tail.offset().as_u64() - last_applied_lsn.next().as_u64();
+            info!(
+                "Partition {partition_id} started. Replaying {catchup_len} record(s) in range: [{}..{}]",
+                last_applied_lsn.next(),
+                current_tail.offset().prev()
+            );
+        } else {
+            info!("Partition {partition_id} started");
+        }
+
+        let mut partition_store_cloned = partition_store.clone();
+        let mut transaction = partition_store_cloned.transaction();
+
+        loop {
+            let config = live_config.live_load();
+            tokio::select! {
+                _ = self.target_leader_state_rx.changed() => {
+                    let target_leader_state = self.target_leader_state_rx.borrow_and_update().clone();
+                    self.on_target_leader_state(target_leader_state).await.context("failed handling target leader state change")?;
+                }
+                Ok(()) = watch_leader_changes.changed() => {
+                    // cloning to avoid holding the underlying RwLock.
+                    let new_state = *watch_leader_changes.borrow_and_update();
+                    if self.status.last_observed_leader_epoch.is_none_or(|last| last < new_state.current_leader_epoch) {
+                        self.status.last_observed_leader_epoch = Some(new_state.current_leader_epoch);
+                        if new_state.current_leader.is_valid() {
+                            self.status.last_observed_leader_node = Some(new_state.current_leader);
+                        }
+                    }
+                    self.leadership_state.maybe_step_down(new_state.current_leader_epoch, new_state.current_leader).await;
+                    self.status.effective_mode = self.leadership_state.effective_mode();
+                }
+                Some(msg) = self.network_leader_svc_rx.next() => {
+                    self.on_rpc(msg, &mut partition_store, live_schemas.live_load(), &last_applied_lsn_watch).await;
+                }
+                _ = status_update_timer.tick() => {
+                    if durable_lsn_watch.has_changed().map_err(|e| ProcessorError::Other(e.into()))? {
+                        let durable_lsn = durable_lsn_watch
+                                .borrow_and_update()
+                                .unwrap_or(Lsn::INVALID);
+                        self.status.durable_lsn = Some(durable_lsn);
+                        self.replica_set_states.note_durable_lsn(
+                            partition_id,
+                            my_node,
+                            durable_lsn,
+                        );
+                    }
+                    let rule_book_version = self.state_machine.rule_book.version();
+                    self.status.last_applied_rule_book_version =
+                        (rule_book_version >= Version::MIN).then_some(rule_book_version);
+                    self.status.last_applied_schema_version =
+                        self.state_machine.schema.as_ref().map(Versioned::version);
+                    self.status.enabled_features = self.state_machine.enabled_features;
+                    self.status_watch_tx.send_modify(|old| {
+                        old.clone_from(&self.status);
+                        old.updated_at = MillisSinceEpoch::now();
+                    });
+                }
+                operation = Self::read_entries(&mut record_stream, config.worker.max_command_batch_size(), &mut command_buffer) => {
+                    // check that reading has succeeded
+                    operation?;
+
+                    transaction.clear();
+
+                    // clear buffers used when applying the next record
+                    action_collector.clear();
+
+                    for entry in command_buffer.drain(..) {
+                        let Some((lsn, record)) = self.maybe_advance(entry, &mut transaction, &started_at)? else {
+                            // this happens when we are reading a filtered gap
+                            continue;
+                        };
+
+                        if self.leadership_state.is_leader() {
+                            leader_record_write_to_read_latency.record(record.created_at().elapsed());
+                        } else {
+                            follower_record_write_to_read_latency.record(record.created_at().elapsed());
+                        }
+
+                        let record = LsnEnvelope {
+                            lsn,
+                            keys: record.keys().clone(),
+                            created_at: record.created_at(),
+                            envelope: Self::decode_record(record)?,
+                        };
+
+                        let maybe_announce_leader = self.apply_record(
+                            record,
+                            &mut transaction,
+                            &mut action_collector,
+                            &mut vqueues,
+                        ).await?;
+
+                        if let Some(announce_leader) = maybe_announce_leader {
+                            // update partition store with latest epoch metadata
+                            if let Some(current_config) = &announce_leader.current_config {
+                                let announced = CachedEpochMetadata {
+                                    version: announce_leader.epoch_version.unwrap(),
+                                    leader_node_id: announce_leader.node_id,
+                                    leader_epoch: announce_leader.leader_epoch,
+                                    current: current_config.to_current_replica_set_state(),
+                                    next: announce_leader.next_config.as_ref().map(|v| v.to_next_replica_set_state()),
+                                };
+
+                                if self.cached_epoch_metadata.as_ref().is_none_or(|c| c.version < announced.version) {
+                                    transaction.put_partition_config_state(&announced)?;
+                                    self.cached_epoch_metadata = Some(announced);
+                                }
+                            };
+
+                            // commit all changes so far, this is important so that the actuators see all changes
+                            // when becoming leader.
+                            transaction.commit().await?;
+                            // Notify all lsn watchers that the lsn has been committed
+
+                            self.last_applied_log_lsn_watch.send_replace(lsn);
+
+                            // We can ignore all actions collected so far because as a new leader we have to instruct the
+                            // actuators afresh.
+                            action_collector.clear();
+
+                            self.status.last_observed_leader_epoch = Some(announce_leader.leader_epoch);
+                            self.status.last_observed_leader_node = Some(announce_leader.node_id);
+
+                            self.replica_set_states.note_observed_leader(
+                                partition_id,
+                                restate_types::partitions::state::LeadershipState {
+                                    current_leader_epoch: announce_leader.leader_epoch,
+                                    current_leader: announce_leader.node_id,
+                                }
+                            );
+
+                            let is_leader = self.leadership_state.on_announce_leader(
+                                &announce_leader,
+                                &mut partition_store,
+                                &self.replica_set_states,
+                                config,
+                                &mut vqueues,
+                                &self.state_machine.rule_book,
+                                &self.state_machine,
+                                &self.state_machine.min_restate_version,
+                            ).await?;
+
+                            Span::current().record("is_leader", is_leader);
+
+                            if is_leader {
+                                if let Some(cached) = &self.cached_epoch_metadata {
+                                    self.replica_set_states.note_observed_membership(
+                                        partition_id,
+                                        restate_types::partitions::state::LeadershipState {
+                                            current_leader_epoch: cached.leader_epoch,
+                                            current_leader: cached.leader_node_id,
+                                        },
+                                        &cached.current.replica_set,
+                                        &cached.next.as_ref().map(|c| &c.replica_set).cloned(),
+                                    );
+                                }
+                                self.status.effective_mode = RunMode::Leader;
+                            } else {
+                                // make sure that we set our effective_mode to follower also when
+                                // not being explicitly asked by the PPM
+                                self.status.effective_mode = RunMode::Follower;
+                            }
+
+                            transaction.clear();
+                        }
+                    }
+
+                    // Commit our changes and notify actuators about actions if we are the leader
+                    transaction.commit().await?;
+                    // Notify all lsn watchers that the lsn has been committed
+                    if let Some(lsn) = &self.status.last_applied_log_lsn {
+                        self.last_applied_log_lsn_watch.send_replace(*lsn);
+                    }
+                    self.leadership_state.handle_actions(vqueues.view(), action_collector.drain(..))?;
+                },
+                result = self.leadership_state.run(&self.state_machine, vqueues.view()) => {
+                    let action_effects = result?;
+                    // We process the action_effects not directly in the run future because it
+                    // requires the run future to be cancellation safe. In the future this could be
+                    // implemented.
+                    self.leadership_state.handle_action_effects(action_effects).await?;
+                }
+                Some(leader_query_cmd) = self.leader_query_rx.recv() => {
+                    self.on_leader_query(vqueues.view(), leader_query_cmd);
+                }
+            }
+            // Allow other tasks on this thread to run, but only if we have exhausted the coop
+            // budget.
+            tokio::task::consume_budget().await;
+        }
+    }
+
+    async fn on_target_leader_state(
+        &mut self,
+        target_leader_state: TargetLeaderState,
+    ) -> anyhow::Result<()> {
+        match target_leader_state {
+            TargetLeaderState::Leader(leadership_info) => {
+                self.status.planned_mode = RunMode::Leader;
+                self.leadership_state
+                    .run_for_leader(leadership_info)
+                    .await
+                    .context("failed handling RunForLeader command")?;
+            }
+            TargetLeaderState::Follower => {
+                self.status.planned_mode = RunMode::Follower;
+                self.leadership_state.step_down().await;
+                self.status.effective_mode = RunMode::Follower;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn on_leader_query(&mut self, metas: VQueuesMeta<'_>, leader_query_cmd: LeaderQueryCommand) {
+        self.leadership_state
+            .handle_leader_query(metas, leader_query_cmd);
+    }
+
+    async fn on_pp_rpc_request(
+        &mut self,
+        response_tx: Reciprocal<
+            Oneshot<Result<PartitionProcessorRpcResponse, PartitionProcessorRpcError>>,
+        >,
+        body: PartitionProcessorRpcRequest,
+        partition_store: &mut PartitionStore,
+        schemas: &Schema,
+    ) {
+        let _ = rpc::RpcHandler::handle(
+            rpc::RpcContext::new(&mut self.leadership_state, schemas, partition_store),
+            body,
+            rpc::Replier::new(response_tx),
+        )
+        .await;
+    }
+
+    async fn on_rpc(
+        &mut self,
+        msg: ServiceMessage<PartitionLeaderService>,
+        partition_store: &mut PartitionStore,
+        schemas: &Schema,
+        last_applied_lsn_watch: &watch::Receiver<Lsn>,
+    ) {
+        match msg {
+            ServiceMessage::Rpc(msg) if msg.msg_type() == PartitionProcessorRpcRequest::TYPE => {
+                let msg = msg.into_typed::<PartitionProcessorRpcRequest>();
+                // note: split() decodes the payload
+                let (response_tx, body) = msg.split();
+                self.on_pp_rpc_request(response_tx, body, partition_store, schemas)
+                    .await;
+            }
+            ServiceMessage::Rpc(msg) if msg.msg_type() == ReceivedIngestRequest::TYPE => {
+                self.on_pp_ingest_request(msg.into_typed()).await;
+            }
+            ServiceMessage::Rpc(msg) if msg.msg_type() == DedupSequenceNrQueryRequest::TYPE => {
+                self.wait_for_tail_then(
+                    last_applied_lsn_watch,
+                    OrderedOp::QueryLegacyDedupSn {
+                        request: msg.into_typed(),
+                    },
+                );
+            }
+            msg => {
+                msg.fail(Verdict::MessageUnrecognized);
+            }
+        }
+    }
+
+    async fn on_ordered_op(partition_store: &mut PartitionStore, op: OrderedOp) {
+        match op {
+            OrderedOp::QueryLegacyDedupSn { request } => {
+                Self::on_dedup_sn_query(partition_store, request).await;
+            }
+        }
+    }
+
+    fn wait_for_tail_then(
+        &self,
+        last_applied_lsn_watch: &watch::Receiver<Lsn>,
+        ordered_op: OrderedOp,
+    ) {
+        let bifrost = self.bifrost.clone();
+        let log_id = self.partition_store.partition().log_id();
+        let mut last_applied_lsn_watch = last_applied_lsn_watch.clone();
+        let mut partition_store = self.partition_store.clone();
+
+        _ = TaskCenter::current().spawn_child(
+            TaskKind::Disposable,
+            "ordered-operation",
+            async move {
+                let tail = bifrost
+                    .find_tail(log_id, FindTailOptions::ConsistentRead)
+                    .await?;
+                let wait_for = tail.offset().prev();
+                last_applied_lsn_watch.wait_for(|v| v >= &wait_for).await?;
+                Self::on_ordered_op(&mut partition_store, ordered_op).await;
+                Ok(())
+            },
+        );
+    }
+
+    /// Used mainly by kafka-ingress to query old style dedup information
+    /// during the migration to the new u128 based producer id introduced with v1.6.
+    async fn on_dedup_sn_query(
+        partition_store: &mut PartitionStore,
+        msg: Incoming<Rpc<DedupSequenceNrQueryRequest>>,
+    ) {
+        let (tx, body) = msg.split();
+        let producer_id = match body.producer_id {
+            ingest::ProducerId::Unknown => {
+                tx.send(DedupSequenceNrQueryResponse {
+                    status: ResponseStatus::Internal {
+                        msg: "missing producer id".into(),
+                    },
+                    sequence_number: None,
+                });
+                return;
+            }
+            ingest::ProducerId::String(v) => ProducerId::Other(v.into()),
+            ingest::ProducerId::Numeric(v) => ProducerId::Producer(v.into()),
+        };
+
+        match partition_store
+            .get_dedup_sequence_number(&producer_id)
+            .await
+        {
+            Ok(result) => {
+                let sequence_number = result.and_then(|v| {
+                    if let DedupSequenceNumber::Sn(sn) = v {
+                        Some(sn)
+                    } else {
+                        None
+                    }
+                });
+
+                tx.send(DedupSequenceNrQueryResponse {
+                    status: ResponseStatus::Ack,
+                    sequence_number,
+                });
+            }
+            Err(err) => {
+                tx.send(DedupSequenceNrQueryResponse {
+                    status: ResponseStatus::Internal {
+                        msg: err.to_string(),
+                    },
+                    sequence_number: None,
+                });
+            }
+        }
+    }
+
+    async fn on_pp_ingest_request(&mut self, msg: Incoming<Rpc<ReceivedIngestRequest>>) {
+        let (reciprocal, request) = msg.split();
+        histogram!(
+            PARTITION_INGESTION_REQUEST_LEN, PARTITION_LABEL => self.partition_id_str.clone()
+        )
+        .record(request.records.len() as f64);
+
+        histogram!(
+            PARTITION_INGESTION_REQUEST_SIZE, PARTITION_LABEL => self.partition_id_str.clone()
+        )
+        .record(request.records.iter().fold(0, |s, r| s + r.estimate_size()) as f64);
+
+        self.leadership_state
+            .forward_many_with_callback(
+                request.records.into_iter(),
+                |result: Result<(), PartitionProcessorRpcError>| match result {
+                    Ok(_) => reciprocal.send(ResponseStatus::Ack.into()),
+                    Err(err) => match err {
+                        PartitionProcessorRpcError::NotLeader(id)
+                        | PartitionProcessorRpcError::LostLeadership(id) => {
+                            reciprocal.send(ResponseStatus::NotLeader { of: id }.into())
+                        }
+                        PartitionProcessorRpcError::Internal(msg) => {
+                            reciprocal.send(ResponseStatus::Internal { msg }.into())
+                        }
+                    },
+                },
+            )
+            .await;
+    }
+
+    fn maybe_advance<'a>(
+        &mut self,
+        maybe_record: LogEntry,
+        transaction: &mut PartitionStoreTransaction<'a>,
+        started_at: &Instant,
+    ) -> Result<Option<(Lsn, Record)>, ProcessorError> {
+        trace!(
+            "Processing {} record at lsn {}",
+            maybe_record.kind(),
+            maybe_record.sequence_number()
+        );
+
+        let (mut lsn, maybe_record) = maybe_record.dissolve();
+        let maybe_envelope = match maybe_record {
+            MaybeRecord::TrimGap(gap) => {
+                return Err(ProcessorError::TrimGapEncountered {
+                    trim_gap_end: gap.to,
+                    read_pointer: lsn,
+                });
+            }
+            MaybeRecord::Filtered(gap) => {
+                // We advance our applied lsn to the end of the filtered gap
+                lsn = gap.to;
+                None
+            }
+            MaybeRecord::DataLoss(gap) => {
+                let log_id = self.partition_store.partition().log_id();
+                error!(%log_id, "Encountered a data-loss gap in the log: [{lsn}..{}]", gap.to);
+                return Err(ProcessorError::DataLossGapEncountered {
+                    data_loss_gap_end: gap.to,
+                    read_pointer: lsn,
+                });
+            }
+            MaybeRecord::Data(record) => Some((lsn, record)),
+        };
+
+        // make sure we advance the FSM, even if it's a filtered gap.
+        transaction.put_applied_lsn(lsn)?;
+        // Update replay status
+        self.status.last_applied_log_lsn = Some(lsn);
+        self.status.last_record_applied_at = Some(MillisSinceEpoch::now());
+        match self.status.replay_status {
+            ReplayStatus::CatchingUp
+                if self
+                    .status
+                    .target_tail_lsn
+                    .is_some_and(|tail| lsn.next() >= tail) =>
+            {
+                // finished catching up
+                self.status.replay_status = ReplayStatus::Active;
+                self.status.target_tail_lsn = None;
+                info!(
+                    "Partition {} caught up in {}!",
+                    self.partition_id_str,
+                    started_at.elapsed().friendly()
+                );
+            }
+            _ => {}
+        };
+
+        Ok(maybe_envelope)
+    }
+
+    // --- Apply new commands/records
+
+    async fn apply_record(
+        &mut self,
+        record: LsnEnvelope,
+        transaction: &mut PartitionStoreTransaction<'_>,
+        action_collector: &mut ActionCollector,
+        vqueues_cache: &mut VQueuesMetaCache,
+    ) -> Result<Option<Box<AnnounceLeaderCommand>>, state_machine::Error> {
+        trace!(lsn = %record.lsn, "Processing bifrost record for '{}': {:?}", record.envelope.kind(), record.envelope.header());
+
+        if !self.is_targeted_to_me(&record.keys) {
+            self.status.num_skipped_records += 1;
+            trace!(
+                "Ignore message which is not targeted to me Partition Range: {:?} Key: {:?}, Header: {:?}",
+                self.key_filter,
+                record.keys,
+                record.envelope.header()
+            );
+            return Ok(None);
+        }
+
+        // todo(azmy): use dedup() directly without first converting to DedupInformation
+        let dedup_information: Option<DedupInformation> = record.envelope.dedup().clone().into();
+
+        // deduplicate if deduplication information has been provided
+        if let Some(dedup_information) = dedup_information {
+            if Self::is_outdated_or_duplicate(&dedup_information, transaction).await? {
+                debug!(
+                    "Ignoring outdated or duplicate message: {:?}",
+                    record.envelope.header()
+                );
+                return Ok(None);
+            }
+            transaction
+                .put_dedup_seq_number(
+                    dedup_information.producer_id.clone(),
+                    &dedup_information.sequence_number,
+                )
+                .map_err(state_machine::Error::Storage)?;
+        }
+
+        // todo: redesign to pass the arc (or reference) further down
+        let record_created_at = record.created_at;
+        let record_lsn = record.lsn;
+        // note: v2 envelope is cheaply clonable since it holds either `Bytes` or
+        // Arc of the payload record.
+        let envelope = Arc::unwrap_or_clone(record.envelope);
+
+        match envelope.kind() {
+            v2::CommandKind::AnnounceLeader => {
+                let envelope = envelope.into_typed::<commands::AnnounceLeaderCommand>();
+                let announce_leader = envelope.into_inner()?;
+                return Ok(Some(Box::new(announce_leader)));
+            }
+            v2::CommandKind::UpdatePartitionDurability => {
+                let envelope = envelope.into_typed::<commands::UpdatePartitionDurabilityCommand>();
+                let partition_durability = envelope.into_inner()?;
+                if partition_durability.partition_id != self.partition_store.partition_id() {
+                    self.status.num_skipped_records += 1;
+                    trace!(
+                        "Ignore update-partition-durability message which is not targeted to me. Message is for {} but I'm {}",
+                        partition_durability.partition_id,
+                        self.partition_store.partition_id()
+                    );
+                    return Ok(None);
+                }
+
+                let partition_durability = PartitionDurability {
+                    modification_time: partition_durability.modification_time,
+                    durable_point: partition_durability.durable_point,
+                };
+                if self.trim_queue.push(&partition_durability) {
+                    transaction.put_partition_durability(&partition_durability)?;
+                }
+            }
+            _ => {
+                self.state_machine
+                    .apply(
+                        envelope,
+                        record_created_at.into(),
+                        record_lsn,
+                        transaction,
+                        action_collector,
+                        vqueues_cache,
+                        self.leadership_state.is_leader(),
+                    )
+                    .await?;
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn is_targeted_to_me(&self, keys: &Keys) -> bool {
+        keys.matches_key_query(&self.key_filter)
+    }
+
+    async fn is_outdated_or_duplicate(
+        dedup_information: &DedupInformation,
+        dedup_resolver: &mut PartitionStoreTransaction<'_>,
+    ) -> Result<bool, StorageError> {
+        let last_dsn = dedup_resolver
+            .get_dedup_sequence_number(&dedup_information.producer_id)
+            .await?;
+
+        // Check whether we have seen this message before
+        let is_duplicate = if let Some(last_dsn) = last_dsn {
+            match (last_dsn, &dedup_information.sequence_number) {
+                (DedupSequenceNumber::Esn(last_esn), DedupSequenceNumber::Esn(esn)) => {
+                    last_esn >= *esn
+                }
+                (DedupSequenceNumber::Sn(last_sn), DedupSequenceNumber::Sn(sn)) => last_sn >= *sn,
+                (last_dsn, dsn) => panic!(
+                    "sequence number types do not match: last sequence number '{last_dsn:?}', received sequence number '{dsn:?}'"
+                ),
+            }
+        } else {
+            false
+        };
+
+        Ok(is_duplicate)
+    }
+
+    /// Tries to read as many records from the `log_reader` as are immediately available and stops
+    /// reading at `max_batching_size`. Trim gaps will result in an immediate error.
+    async fn read_entries<S>(
+        log_reader: &mut S,
+        max_batching_size: usize,
+        record_buffer: &mut Vec<LogEntry>,
+    ) -> Result<(), ProcessorError>
+    where
+        S: Stream<Item = Result<LogEntry, restate_bifrost::Error>> + Unpin,
+    {
+        // beyond this point we must not await; otherwise we are no longer cancellation safe
+        let first_record = log_reader.next().await;
+
+        let Some(first_record) = first_record else {
+            return Err(ProcessorError::LogReadStreamTerminated);
+        };
+
+        record_buffer.clear();
+        record_buffer.push(first_record?);
+
+        while record_buffer.len() < max_batching_size {
+            // read more message from the stream but only if they are immediately available
+            if let Some(record) = log_reader.next().now_or_never() {
+                let Some(record) = record else {
+                    return Err(ProcessorError::LogReadStreamTerminated);
+                };
+                record_buffer.push(record?);
+            } else {
+                // no more immediately available records found
+                break;
+            }
+        }
+
+        Ok(())
+    }
+}
